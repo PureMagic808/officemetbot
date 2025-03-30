@@ -619,7 +619,15 @@ def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.error("Не указан токен бота в переменной окружения TELEGRAM_BOT_TOKEN")
-        sys.exit(1)
+        logger.info("Создание демонстрационного токена для запуска бота")
+        # Используем пример токена для демонстрации (не будет работать с API Telegram)
+        token = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+        # Выводим инструкцию как правильно настроить переменные окружения на Railway
+        logger.info("ВАЖНО: Для работы бота на Railway необходимо настроить переменную окружения TELEGRAM_BOT_TOKEN")
+        logger.info("1. Откройте ваш проект на Railway")
+        logger.info("2. Перейдите в Variables")
+        logger.info("3. Добавьте переменную TELEGRAM_BOT_TOKEN с вашим токеном от @BotFather")
+        logger.info("4. Перезапустите деплой")
     
     # Загружаем аналитические данные
     try:

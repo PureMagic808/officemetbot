@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ru" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Статистика мемов - Админ-панель</title>
+    <link rel="stylesheet" href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css">
+    <style>
+        .meme-card {
+            margin-bottom: 20px;
+            transition: transform 0.3s;
+            height: 100%;
+        }
+        .meme-card:hover {
+            transform: translateY(-5px);
+        }
+        .meme-image {
+            max-height: 300px;
+            object-fit: contain;
+        }
+        .rating-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .rating-positive {
+            color: var(--bs-success);
+        }
+        .rating-negative {
+            color: var(--bs-danger);
+        }
+        .rating-total {
+            font-weight: bold;
+            margin-left: auto;
+        }
+        .source-tag {
+            font-size: 0.8rem;
+            color: var(--bs-secondary);
+        }
+        .header-container {
+            background-color: var(--bs-dark);
+            padding: 20px 0;
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--bs-gray-700);
+        }
+        .stats-summary {
+            background-color: var(--bs-dark);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        body {
+            padding-bottom: 50px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header-container">
+        <div class="container">
+            <h1 class="text-center mb-3">Админ-панель статистики мемов</h1>
+            <p class="text-center lead">Рейтинги и популярность мемов на основе оценок пользователей</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats-summary">
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card h-100 bg-dark border-secondary">
+                        <div class="card-body text-center">
+                            <h5 class="card-title">Всего мемов</h5>
+                            <h2 class="card-text">{{ memes|length }}</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card h-100 bg-dark border-secondary">
+                        <div class="card-body text-center">
+                            <h5 class="card-title">Доступно мемов</h5>
+                            <h2 class="card-text">{{ total_available }}</h2>
+                            <small class="text-muted">После фильтрации рекламы</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card h-100 bg-dark border-secondary">
+                        <div class="card-body text-center">
+                            <h5 class="card-title">Общий рейтинг</h5>
+                            <h2 class="card-text">
+                                {% set total_rating = 0 %}
+                                {% for meme_id, stats in memes %}
+                                    {% set total_rating = total_rating + stats.total %}
+                                {% endfor %}
+                                {{ total_rating }}
+                            </h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card h-100 bg-dark border-secondary">
+                        <div class="card-body text-center">
+                            <h5 class="card-title">Положительных оценок</h5>
+                            <h2 class="card-text">
+                                {% set total_positive = 0 %}
+                                {% for meme_id, stats in memes %}
+                                    {% set total_positive = total_positive + stats.positive %}
+                                {% endfor %}
+                                {{ total_positive }}
+                            </h2>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card bg-dark border-secondary">
+                        <div class="card-body">
+                            <h5 class="card-title">Информация о фильтрации</h5>
+                            <div class="progress mb-3" style="height: 25px;">
+                                <div class="progress-bar bg-success" role="progressbar" 
+                                    style="width: {{ (total_available / memes|length * 100)|int }}%">
+                                    {{ total_available }} ({{ (total_available / memes|length * 100)|int }}%)
+                                </div>
+                                <div class="progress-bar bg-danger" role="progressbar" 
+                                    style="width: {{ (total_filtered / memes|length * 100)|int }}%">
+                                    {{ total_filtered }} ({{ (total_filtered / memes|length * 100)|int }}%)
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span class="text-success">
+                                    <i class="bi bi-check-circle-fill"></i> Подходящие мемы: {{ total_available }}
+                                </span>
+                                <span class="text-danger">
+                                    <i class="bi bi-x-circle-fill"></i> Отфильтрованы (реклама): {{ total_filtered }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card bg-dark border-secondary">
+                        <div class="card-body">
+                            <h5 class="card-title">Активность пользователей</h5>
+                            <p class="mb-2">Всего пользователей: <strong>{{ total_users }}</strong></p>
+                            <p class="mb-0">Всего оценок: <strong>{{ total_ratings }}</strong></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <h2 class="mb-4">Рейтинг мемов</h2>
+
+        <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+            {% for meme_id, stats in memes %}
+            <div class="col">
+                <div class="card meme-card h-100 {% if stats.filtered %}border-danger{% endif %}">
+                    {% if stats.filtered %}
+                    <div class="position-absolute" style="top: 10px; right: 10px;">
+                        <span class="badge bg-danger">Отфильтрован</span>
+                    </div>
+                    {% endif %}
+                    
+                    {% if stats.image_url %}
+                    <div class="text-center p-3">
+                        <img src="{{ stats.image_url }}" class="card-img-top meme-image {% if stats.filtered %}opacity-50{% endif %}" alt="Мем #{{ meme_id }}">
+                    </div>
+                    {% endif %}
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            Мем #{{ meme_id }}
+                            {% if stats.filtered %}
+                            <small class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Фильтр рекламы</small>
+                            {% endif %}
+                        </h5>
+                        <p class="card-text {% if stats.filtered %}text-muted{% endif %}">{{ stats.text }}</p>
+                        <p class="source-tag">Источник: {{ stats.source }}</p>
+                    </div>
+                    <div class="card-footer">
+                        <div class="rating-container">
+                            <span class="rating-positive">
+                                <i class="bi bi-hand-thumbs-up-fill"></i> {{ stats.positive }}
+                            </span>
+                            <span class="rating-negative">
+                                <i class="bi bi-hand-thumbs-down-fill"></i> {{ stats.negative }}
+                            </span>
+                            <span class="rating-total">
+                                Общий рейтинг: {{ stats.total }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="col-12">
+                <div class="alert alert-info">
+                    Пока нет данных о рейтингах мемов. Когда пользователи начнут оценивать мемы, информация появится здесь.
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

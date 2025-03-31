@@ -80,29 +80,21 @@ if not is_workflow:
     except Exception as e:
         logger.info(f"Ошибка при проверке логов процессов: {e}")
 
-# Если запущен из workflow run_bot, добавляем специальный лаунчер бота в приоритет
+# Если запущен из workflow run_bot, НЕ запускаем бота - он запускается отдельно
 if is_workflow and workflow_name == "run_bot":
-    logger.info("Запуск из workflow run_bot, пробуем специальный лаунчер")
-    launcher_script = "workflow_bot_launcher.py"
-    if os.path.exists(launcher_script):
-        logger.info(f"Запускаем специальный лаунчер {launcher_script}...")
-        try:
-            # Делаем файл исполняемым
-            os.chmod(launcher_script, 0o755)
-            # Запускаем специальный лаунчер для бота с рекомендациями
-            subprocess.run([sys.executable, launcher_script])
-            sys.exit(0)
-        except Exception as e:
-            logger.error(f"Ошибка при запуске специального лаунчера: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+    logger.info("Обнаружен запуск из workflow run_bot - пропускаем запуск бота")
+    logger.info("Бот будет запущен отдельно из workflow run_bot")
 
 # Проверяем наличие определенных переменных окружения, которые могут указывать на workflow
 if "REPLIT_WORKFLOW" in os.environ or is_workflow:
     logger.info(f"REPLIT_WORKFLOW: {workflow_name}")
     
-    # Проверяем, запускаемся ли мы из workflow run_bot или просто хотим запустить бота
+    # Если запущено из workflow run_bot, не запускаем бота в main.py
+    # Бот должен быть запущен отдельным процессом из workflow
     if workflow_name == "run_bot" or is_workflow:
+        logger.info("Обнаружен workflow run_bot - пропускаем запуск бота внутри main.py")
+        logger.info("Переходим к запуску только веб-приложения")
+    else:
         # Запуск из workflow run_bot
         logger.info("Запуск Telegram-бота (workflow или прямой запуск)")
         

@@ -22,7 +22,20 @@ def try_run_bot():
     """
     Пытается запустить бота через различные скрипты в порядке приоритета.
     """
+    # Прямой импорт и запуск бота с нулевой толерантностью к рекламе
+    try:
+        logger.info("Пробуем напрямую запустить бота через import")
+        import zero_ads_bot
+        zero_ads_bot.main()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при прямом запуске бота: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+    
+    # Если прямой запуск не удался, пробуем через скрипты
     scripts = [
+        "run_zero_ads_bot.py",
         "bot_starter.py",
         "run_bot.py",
         "main.py --bot"

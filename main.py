@@ -333,8 +333,33 @@ try:
     
     # Запускаем Flask-приложение
     if __name__ == "__main__":
-        logger.info("Запуск веб-приложения")
-        app.run(host='0.0.0.0', port=5000, debug=True)
+        # Проверяем, запущен ли уже сервер на порту 5000
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        port_in_use = False
+        try:
+            sock.bind(('0.0.0.0', 5000))
+        except socket.error:
+            port_in_use = True
+        finally:
+            sock.close()
+        
+        if port_in_use:
+            logger.warning("Порт 5000 уже используется другим процессом")
+            logger.info("Веб-интерфейс уже запущен, пропускаем запуск")
+            # Если мы в workflow run_bot, здесь нужно запустить только бота
+            if "REPLIT_WORKFLOW" in os.environ and os.environ.get("REPLIT_WORKFLOW") == "run_bot":
+                try:
+                    logger.info("Запускаем бота напрямую через import zero_ads_bot")
+                    import zero_ads_bot
+                    zero_ads_bot.main()
+                except Exception as e:
+                    logger.error(f"Ошибка при прямом запуске бота: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+        else:
+            logger.info("Запуск веб-приложения")
+            app.run(host='0.0.0.0', port=5000, debug=True)
         
 except Exception as e:
     logger.error(f"Произошла ошибка при запуске: {e}")

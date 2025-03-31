@@ -1,4 +1,4 @@
-
+#1
 import vk_api
 import random
 import requests
@@ -23,8 +23,27 @@ class VKMemesFetcher:
     
     def get_random_meme(self, group_ids):
         try:
-            group_id = random.choice(group_ids)
-            posts = self.vk.wall.get(owner_id=-group_id, count=100)
+            # Расширенный список групп с мемами про офис
+            office_group_ids = [
+                29534144,   # Офисный планктон
+                57846937,   # Мемы для офиса
+                209220261,  # HR-мемы
+                134304772,  # Суровый менеджмент
+                85585215,   # Офисный юмор
+                111463603,  # Работа в офисе
+                162742070,  # Офис на минималках
+                160951472   # Офисные приключения
+            ]
+            
+            # Используем преимущественно группы про офис
+            if random.random() < 0.8 and office_group_ids:  # 80% шанс взять специальную группу
+                try_office_group = True
+                group_id = random.choice(office_group_ids)
+            else:
+                try_office_group = False
+                group_id = random.choice(group_ids)
+                
+            posts = self.vk.wall.get(owner_id=-group_id, count=150)  # Увеличено количество постов
             
             # Фильтруем посты
             posts_with_photos = []
@@ -36,20 +55,55 @@ class VKMemesFetcher:
                 # Проверяем рекламные метки
                 if post.get('marked_as_ads', 0) or post.get('is_pinned', 0):
                     continue
-                    
-                # Проверяем текст на рекламные слова
+                
+                # Проверка на минимальный размер текста (для мемов часто нужен текст)
                 text = post.get('text', '').lower()
-                ad_words = ['реклама', 'ads', 'купить', 'продажа', 'магазин', 'заказать', 
-                          'акция', 'скидка', 'распродажа', 'товар', 'цена', 'sale', 'shop',
-                          'доставка', 'заказ', 'бесплатно', 'руб', '₽', '$', 'подпишись']
+                if len(text.split()) < 3 and not try_office_group:
+                    continue
+                    
+                # Проверяем текст на рекламные слова (расширенный список)
+                ad_words = [
+                    'реклама', 'ads', 'купить', 'продажа', 'магазин', 'заказать', 
+                    'акция', 'скидка', 'распродажа', 'товар', 'цена', 'sale', 'shop',
+                    'доставка', 'заказ', 'бесплатно', 'руб', '₽', '$', 'подпишись',
+                    'подписывайтесь', 'заходите', 'вступайте', 'промо', 'промокод',
+                    'discount', 'offer', 'предложение', 'выгодно', 'дешево',
+                    'отзывы', 'тренировки', 'спорт', 'фитнес', 'gym', 'тренер',
+                    'маникюр', 'nail', 'ногти', 'волосы', 'стрижка', 'окрашивание',
+                    'макияж', 'косметика', 'мастер', 'салон', 'красоты',
+                    'заказывайте', 'звоните', 'записывайтесь', 'пишите',
+                    'консультация', 'специалист', 'эксперт', 'курс', 'тренинг'
+                ]
                 if any(word in text for word in ad_words):
                     continue
-                    
-                # Проверяем ссылки
-                if 'attachments' in post and any(att.get('type') == 'link' for att in post['attachments']):
+                
+                # Проверка на религиозный контент
+                religious_words = [
+                    'храм', 'церковь', 'бог', 'господ', 'молитв', 'православ',
+                    'христиан', 'вера', 'служение', 'духовн', 'священник', 'библи'
+                ]
+                if any(word in text for word in religious_words):
                     continue
                     
-                posts_with_photos.append(post)
+                # Проверяем ссылки и внешние сервисы
+                if ('attachments' in post and 
+                    any(att.get('type') in ['link', 'market', 'app', 'poll'] for att in post['attachments'])):
+                    continue
+                    
+                # Если это офисная группа, ищем офисные ключевые слова
+                if try_office_group:
+                    office_words = [
+                        'офис', 'работа', 'босс', 'начальник', 'коллега', 'сотрудник',
+                        'зарплата', 'проект', 'отпуск', 'отдел', 'компания', 'корпоратив',
+                        'увольнение', 'совещание', 'встреча', 'дедлайн', 'кофе', 'перерыв',
+                        'документ', 'отчет', 'график', 'менеджер', 'клиент', 'переработка',
+                        'понедельник', 'пятница', 'выходной', 'будни', 'работать'
+                    ]
+                    # Добавляем пост только если есть хотя бы одно офисное слово в тексте
+                    if any(word in text for word in office_words):
+                        posts_with_photos.append(post)
+                else:
+                    posts_with_photos.append(post)
             
             if not posts_with_photos:
                 return self.DEFAULT_ERROR_IMAGE, self.DEFAULT_ERROR_TEXT

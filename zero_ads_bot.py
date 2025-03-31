@@ -216,6 +216,38 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    # Проверяем, не запущен ли уже бот (предотвращаем конфликт Telegram API)
+    def check_bot_process():
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["ps", "aux"], 
+                capture_output=True, 
+                text=True
+            )
+            output = result.stdout
+            # Ищем другие процессы бота, исключая текущий PID
+            current_pid = os.getpid()
+            bot_processes = []
+            
+            for line in output.split('\n'):
+                if 'python' in line and ('bot' in line.lower() or 'telegram' in line.lower()) and str(current_pid) not in line:
+                    bot_processes.append(line)
+            
+            if bot_processes:
+                logger.warning(f"Обнаружены другие процессы бота ({len(bot_processes)}). Это может вызвать конфликт.")
+                logger.warning("Первые 3 процесса:" + "\n".join(bot_processes[:3]))
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка при проверке процессов бота: {e}")
+            return False
+    
+    # Если уже запущен экземпляр бота, просто выходим
+    if check_bot_process():
+        logger.warning("Бот уже запущен в другом процессе. Завершаем текущий процесс.")
+        sys.exit(0)
+    
     logger.info("=== ЗАПУСК TELEGRAM БОТА С НУЛЕВОЙ ТОЛЕРАНТНОСТЬЮ К РЕКЛАМЕ ===")
     
     # Получение токена Telegram бота
@@ -746,9 +778,53 @@ def main():
     application.add_handler(CommandHandler("recommend", recommend_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Запускаем бота
-    logger.info("Запуск бота в режиме polling...")
-    application.run_polling()
+    # Проверяем наличие lockfile, чтобы избежать двойного запуска бота
+    lockfile = ".telegram_bot_lock"
+    if os.path.exists(lockfile):
+        # Проверяем, актуален ли lockfile (создан не более 10 минут назад)
+        try:
+            file_time = os.path.getmtime(lockfile)
+            current_time = time.time()
+            if current_time - file_time < 600:  # 10 минут в секундах
+                logger.warning(f"Обнаружен lockfile ({lockfile}). Бот уже запущен!")
+                logger.warning("Завершаем текущий процесс бота для избежания конфликта")
+                sys.exit(0)
+            else:
+                # Если lockfile устарел, удаляем его
+                logger.warning(f"Обнаружен устаревший lockfile. Удаляем.")
+                os.remove(lockfile)
+        except Exception as e:
+            logger.error(f"Ошибка при проверке lockfile: {e}")
+            # На всякий случай удаляем lockfile
+            try:
+                os.remove(lockfile)
+            except:
+                pass
+    
+    # Создаем lockfile
+    try:
+        with open(lockfile, 'w') as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        logger.error(f"Ошибка при создании lockfile: {e}")
+    
+    try:
+        # Запускаем бота в режиме polling
+        logger.info("Запуск бота в режиме polling...")
+        application.run_polling()
+    except telegram.error.Conflict as e:
+        logger.error(f"Конфликт Telegram API: {e}")
+        logger.error("Обнаружен другой запущенный экземпляр бота. Завершаем работу.")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+    finally:
+        # Удаляем lockfile при завершении
+        try:
+            if os.path.exists(lockfile):
+                os.remove(lockfile)
+        except Exception as e:
+            logger.error(f"Ошибка при удалении lockfile: {e}")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,866 @@
+#!/usr/bin/env python3
+"""
+Улучшенный файл для запуска Telegram-бота на Railway с исправлениями проблем загрузки мемов.
+"""
+import logging
+import os
+import signal
+import sys
+import threading
+import time
+import random
+import json
+import socket
+from datetime import datetime
+
+# Для работы с Telegram API
+try:
+    import telegram
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+except ImportError:
+    # Если импорт не удался, выводим сообщение об ошибке и завершаем программу
+    print("ОШИБКА: Не удалось импортировать модули Telegram. Проверьте установку зависимостей.")
+    sys.exit(1)
+
+# Импортируем собственные модули
+try:
+    from meme_data import MEMES, MEME_SOURCES
+    from advanced_filter import is_suitable_meme_advanced
+    from recommendation_engine import (
+        update_user_preferences, 
+        recommend_memes, 
+        get_user_preferences_stats, 
+        analyze_user_history
+    )
+    import meme_analytics
+except ImportError as e:
+    print(f"ОШИБКА: Не удалось импортировать необходимые модули: {e}")
+    sys.exit(1)
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    stream=sys.stdout)
+logger = logging.getLogger(__name__)
+
+# Путь к файлу для сохранения мемов
+MEMES_CACHE_FILE = "cached_filtered_memes.json"
+REJECTED_CACHE_FILE = "rejected_memes.json"
+
+# Словарь для хранения состояния пользователей
+user_states = {}
+
+# Кэшированные отфильтрованные мемы
+memes_collection = {}
+
+# Словарь отклоненных мемов для анализа
+rejected_memes = {}
+
+# Конфигурация обновления мемов
+UPDATE_INTERVAL = 3600  # Интервал обновления в секундах (1 час)
+MIN_MEMES_COUNT = 50    # Минимальное количество мемов, которое должно быть доступно
+MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов для получения за одно обновление
+
+# Получение группы ВК для мемов офисных работников - обновленный список публичных групп
+# Исключаем группы, которые требуют членства или заблокированы
+VK_GROUP_IDS = [88523457, 63997621, 161266689, 149279263, 185954822, 103092828, 172167439, 57846937, 174497945, 203067105]
+
+# Флаг для управления процессом обновления
+update_thread_running = False
+
+def signal_handler(sig, frame):
+    """Обработчик сигнала для корректного завершения работы бота"""
+    logger.info("Получен сигнал завершения. Завершаем работу бота...")
+    global update_thread_running
+    update_thread_running = False
+    # Сохраняем мемы перед выходом
+    save_memes_to_cache()
+    sys.exit(0)
+
+def save_memes_to_cache():
+    """Сохраняет коллекцию мемов в файл кэша"""
+    try:
+        with open(MEMES_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(memes_collection, f, ensure_ascii=False, indent=2)
+        logger.info(f"Сохранено {len(memes_collection)} мемов в кэш")
+        
+        # Сохраняем также отклоненные мемы для дальнейшего анализа
+        with open(REJECTED_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(rejected_memes, f, ensure_ascii=False, indent=2)
+        logger.info(f"Сохранено {len(rejected_memes)} отклоненных мемов")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении мемов в кэш: {e}")
+
+def load_memes_from_cache():
+    """Загружает мемы из файла кэша, если он существует"""
+    global memes_collection, rejected_memes
+    try:
+        if os.path.exists(MEMES_CACHE_FILE):
+            with open(MEMES_CACHE_FILE, 'r', encoding='utf-8') as f:
+                loaded_memes = json.load(f)
+                if loaded_memes and isinstance(loaded_memes, dict):
+                    memes_collection = loaded_memes
+                    logger.info(f"Загружено {len(memes_collection)} мемов из кэша")
+        
+        if os.path.exists(REJECTED_CACHE_FILE):
+            with open(REJECTED_CACHE_FILE, 'r', encoding='utf-8') as f:
+                loaded_rejected = json.load(f)
+                if loaded_rejected and isinstance(loaded_rejected, dict):
+                    rejected_memes = loaded_rejected
+                    logger.info(f"Загружено {len(rejected_memes)} отклоненных мемов")
+        
+        return len(memes_collection) > 0
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке мемов из кэша: {e}")
+    
+    return False
+
+def init_default_memes():
+    """
+    Инициализирует базовый набор мемов из встроенной коллекции MEMES.
+    Это гарантирует, что у бота всегда будет стартовый набор мемов.
+    """
+    global memes_collection, rejected_memes
+    
+    logger.info("Инициализация стандартного набора мемов")
+    count_added = 0
+    count_rejected = 0
+    
+    # Проходим по всем мемам из статической коллекции
+    for meme_id, meme_data in MEMES.items():
+        # Проверяем, подходит ли мем по критериям фильтрации
+        if is_suitable_meme_advanced(meme_data):
+            # Добавляем в основную коллекцию
+            memes_collection[meme_id] = meme_data
+            count_added += 1
+        else:
+            # Добавляем в список отклоненных
+            rejected_memes[meme_id] = meme_data
+            count_rejected += 1
+    
+    logger.info(f"Инициализировано {count_added} подходящих мемов и {count_rejected} отклоненных мемов")
+    return count_added > 0
+
+def try_fetch_memes_from_vk():
+    """
+    Пытается получить мемы из VK API или возвращает False, 
+    если это невозможно (например, нет токена)
+    """
+    try:
+        # VK API токен для доступа к мемам с публичных страниц
+        vk_token = os.environ.get("VK_TOKEN", "")
+        if not vk_token:
+            logger.warning("VK_TOKEN не найден, использование только стандартной коллекции мемов")
+            return False
+        
+        # Импортируем VK-утилиты только если есть токен
+        try:
+            from vk_utils import VKMemesFetcher
+        except ImportError as e:
+            logger.error(f"Не удалось импортировать VKMemesFetcher: {e}")
+            return False
+        
+        # Инициализация клиента VK
+        vk_client = VKMemesFetcher(vk_token)
+        
+        # Выполняем пробный вызов, чтобы убедиться, что API работает
+        test_success = False
+        try:
+            # Пробуем получить один мем для проверки
+            image_url, text = vk_client.get_random_meme(VK_GROUP_IDS)
+            if image_url:
+                test_success = True
+        except Exception as e:
+            logger.error(f"Тестовый вызов VK API не удался: {e}")
+            return False
+        
+        return test_success
+    except Exception as e:
+        logger.error(f"Ошибка при настройке VK API: {e}")
+        return False
+
+def update_memes():
+    """Функция для периодического обновления мемов"""
+    global update_thread_running
+    global memes_collection
+    
+    try:
+        # Если у нас нет кэшированных мемов, инициализируем из статического списка
+        if not memes_collection:
+            logger.info("Коллекция мемов пуста, инициализируем из встроенной коллекции")
+            init_default_memes()
+            save_memes_to_cache()
+        
+        # Проверяем возможность получения мемов из VK
+        vk_available = try_fetch_memes_from_vk()
+        
+        if vk_available:
+            # Импортируем VK-утилиты, так как знаем, что они доступны
+            from vk_utils import VKMemesFetcher
+            
+            # VK API токен для доступа к мемам с публичных страниц
+            vk_token = os.environ.get("VK_TOKEN", "")
+            
+            # Инициализация клиента VK
+            vk_client = VKMemesFetcher(vk_token)
+            
+            update_thread_running = True
+            logger.info("Запущен поток обновления мемов из VK")
+            
+            while update_thread_running:
+                try:
+                    # Проверяем, нужно ли обновление (если мемов меньше минимального количества)
+                    if len(memes_collection) < MIN_MEMES_COUNT:
+                        logger.info(f"Количество мемов ({len(memes_collection)}) меньше минимального {MIN_MEMES_COUNT}. Запускаем обновление...")
+                        fetch_and_add_new_memes(vk_client, MAX_MEMES_TO_FETCH)
+                    
+                    # Периодическое обновление
+                    logger.info("Выполняется регулярное обновление мемов...")
+                    fetch_and_add_new_memes(vk_client, 10)  # Получаем 10 мемов за раз
+                    
+                    # Сохраняем обновленную коллекцию
+                    save_memes_to_cache()
+                    
+                    # Ждем заданный интервал перед следующим обновлением
+                    time.sleep(UPDATE_INTERVAL)
+                except Exception as e:
+                    logger.error(f"Ошибка в процессе обновления мемов из VK: {e}")
+                    # Гарантируем, что у нас есть мемы из статической коллекции
+                    if len(memes_collection) < MIN_MEMES_COUNT:
+                        init_default_memes()
+                        save_memes_to_cache()
+                    time.sleep(60)  # В случае ошибки ждем минуту и пробуем снова
+        else:
+            # VK недоступен, используем только встроенную коллекцию
+            logger.info("VK API недоступен, используем только встроенную коллекцию мемов")
+            
+            # Проверяем, достаточно ли у нас мемов
+            if len(memes_collection) < MIN_MEMES_COUNT:
+                logger.info(f"Количество мемов ({len(memes_collection)}) меньше минимального {MIN_MEMES_COUNT}. Инициализируем дополнительные.")
+                init_default_memes()
+                save_memes_to_cache()
+            
+            update_thread_running = True
+            
+            # Поддерживаем тред активным для обработки сигналов
+            while update_thread_running:
+                time.sleep(300)  # Спим 5 минут, просто чтобы поддерживать поток
+                
+                # Проверяем и восстанавливаем коллекцию, если она повреждена
+                if not memes_collection or len(memes_collection) < MIN_MEMES_COUNT:
+                    logger.warning(f"Обнаружено повреждение коллекции мемов ({len(memes_collection)}). Переинициализация.")
+                    init_default_memes()
+                    save_memes_to_cache()
+    except Exception as e:
+        logger.error(f"Критическая ошибка в потоке обновления мемов: {e}")
+        update_thread_running = False
+
+def fetch_and_add_new_memes(vk_client, count=10):
+    """Получает новые мемы из VK и добавляет их в коллекцию"""
+    global memes_collection, rejected_memes
+    
+    logger.info(f"Получение {count} новых мемов...")
+    new_memes_count = 0
+    rejected_count = 0
+    attempts = 0
+    max_attempts = count * 10  # Увеличили максимум попыток получения для лучшего фильтра
+    
+    while new_memes_count < count and attempts < max_attempts:
+        attempts += 1
+        
+        try:
+            # Получаем случайный мем из VK
+            image_url, text = vk_client.get_random_meme(VK_GROUP_IDS)
+            
+            if not image_url:
+                logger.warning("Не удалось получить URL изображения мема")
+                # Если мы сделали много попыток без успеха, прерываем
+                if attempts % 10 == 0:
+                    logger.warning(f"Сделано {attempts} попыток без успеха. Проверьте доступ к группам VK.")
+                continue
+            
+            # Создаем новый ID для мема на основе хеша URL и текста
+            meme_id = f"vk_{abs(hash(image_url + (text or '')))}"
+            
+            # Проверяем, есть ли такой мем уже в коллекции или в отклоненных
+            if meme_id in memes_collection or meme_id in rejected_memes:
+                logger.debug(f"Мем {meme_id} уже существует в коллекции или отклонен ранее")
+                continue
+            
+            # Создаем объект мема
+            new_meme = {
+                "image_url": image_url,
+                "text": text or "",  # Защита от None
+                "source": "vk_auto_update",
+                "tags": ["офис", "мем", "автообновление"],
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Проверяем через улучшенный фильтр контента
+            if is_suitable_meme_advanced(new_meme):
+                memes_collection[meme_id] = new_meme
+                new_memes_count += 1
+                logger.info(f"Добавлен новый мем {meme_id}")
+            else:
+                rejected_memes[meme_id] = new_meme
+                rejected_count += 1
+                logger.info(f"Отклонен мем {meme_id} как неподходящий (реклама)")
+        
+        except Exception as e:
+            logger.error(f"Ошибка при получении мема: {e}")
+            # Делаем небольшую паузу при ошибке
+            time.sleep(1)
+    
+    logger.info(f"Получено {new_memes_count} новых мемов, отклонено {rejected_count} из {attempts} попыток")
+    return new_memes_count
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /start. Отправляет первый мем пользователю."""
+    user = update.effective_user
+    user_id = user.id
+    username = user.username
+    
+    logger.info(f"Команда /start от пользователя {username} (ID: {user_id})")
+    
+    # Инициализируем состояние пользователя
+    if user_id not in user_states:
+        user_states[user_id] = {
+            "username": username,
+            "current_meme": None,
+            "viewed_memes": [],
+            "ratings": {}
+        }
+        
+    # Записываем активность пользователя в аналитику
+    try:
+        meme_analytics.record_user_session(user_id)
+    except Exception as e:
+        logger.error(f"Ошибка при записи сессии пользователя в аналитику: {e}")
+    
+    # Приветственное сообщение
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            "👋 Привет! Я бот для просмотра мемов без рекламы.\n\n"
+            "Используем передовую технологию фильтрации рекламного контента. "
+            "Все мемы тщательно проверяются системой фильтрации.\n\n"
+            "Используйте /start для начала, 👍/👎 для оценки мема, /next для пропуска."
+        )
+    )
+    
+    # Отправляем первый мем
+    await send_random_meme(update, context)
+
+async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет случайный мем пользователю."""
+    user = update.effective_user
+    user_id = user.id
+    
+    if user_id not in user_states:
+        # Если пользователь не инициализирован, запускаем start
+        await start(update, context)
+        return
+    
+    # Проверяем, есть ли мемы в коллекции
+    if not memes_collection:
+        logger.warning("Мемы отсутствуют в коллекции. Инициализация стандартного набора.")
+        if not init_default_memes():
+            # Если не удалось инициализировать, сообщаем пользователю
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="К сожалению, на данный момент нет доступных мемов. Попробуйте позже."
+            )
+            return
+    
+    # Проверяем, достаточно ли мемов
+    if len(memes_collection) == 0:
+        logger.error("Коллекция мемов пуста после инициализации. Критическая ошибка.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Произошла ошибка при загрузке мемов. Пожалуйста, попробуйте позже."
+        )
+        return
+    
+    # Получаем все доступные мемы, которые пользователь еще не видел
+    viewed_memes = user_states[user_id].get("viewed_memes", [])
+    available_memes = [meme_id for meme_id in memes_collection if meme_id not in viewed_memes]
+    
+    # Если все мемы просмотрены или доступных мемов мало, начинаем сначала
+    if not available_memes or len(available_memes) < 5:
+        logger.info(f"Пользователь {user_id} просмотрел все мемы, сбрасываем историю")
+        user_states[user_id]["viewed_memes"] = []
+        available_memes = list(memes_collection.keys())
+    
+    # Проверяем, достаточно ли оценок у пользователя для рекомендаций
+    ratings = user_states[user_id].get("ratings", {})
+    
+    if len(ratings) >= 5:
+        # У пользователя достаточно оценок для персонализированных рекомендаций
+        try:
+            # Получаем рекомендованные мемы для пользователя
+            recommended_memes = recommend_memes(user_id, memes_collection, 10)
+            
+            # Выбираем мем из рекомендованных, который пользователь еще не видел
+            recommended_unseen = [m for m in recommended_memes if m not in viewed_memes]
+            
+            if recommended_unseen:
+                # Если есть непросмотренные рекомендации, используем их
+                logger.info(f"Отправляем персонализированную рекомендацию для пользователя {user_id}")
+                meme_id = recommended_unseen[0]  # Берем первый рекомендованный мем
+            else:
+                # Если нет, выбираем случайный мем
+                if available_memes:
+                    meme_id = random.choice(available_memes)
+                else:
+                    # Если нет доступных мемов, используем любой
+                    meme_id = random.choice(list(memes_collection.keys()))
+        except Exception as e:
+            logger.error(f"Ошибка при получении рекомендаций: {e}")
+            # В случае ошибки выбираем случайный мем
+            if available_memes:
+                meme_id = random.choice(available_memes)
+            else:
+                # Если нет доступных мемов, используем любой
+                meme_id = random.choice(list(memes_collection.keys()))
+    else:
+        # Недостаточно оценок для рекомендаций - выбираем случайный мем
+        if available_memes:
+            meme_id = random.choice(available_memes)
+        else:
+            # Если нет доступных мемов, используем любой
+            meme_id = random.choice(list(memes_collection.keys()))
+    
+    # Если у нас есть ID мема, но его нет в коллекции, возможно кэш был обновлен
+    # В этом случае выбираем любой доступный мем
+    if meme_id not in memes_collection:
+        logger.warning(f"Выбранный мем {meme_id} не найден в коллекции, выбираем другой")
+        if memes_collection:
+            meme_id = random.choice(list(memes_collection.keys()))
+        else:
+            # Если коллекция пуста, сообщаем пользователю
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="К сожалению, на данный момент нет доступных мемов. Попробуйте позже."
+            )
+            return
+    
+    meme = memes_collection[meme_id]
+    
+    # Создаем клавиатуру для оценки
+    keyboard = [
+        [
+            InlineKeyboardButton("👍", callback_data=f"rate:{meme_id}:1"),
+            InlineKeyboardButton("👎", callback_data=f"rate:{meme_id}:-1")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Отправляем мем пользователю
+    text = meme.get("text", "")
+    image_url = meme.get("image_url", "")
+    
+    try:
+        if image_url:
+            try:
+                message = await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=image_url,
+                    caption=text,
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке изображения: {e}")
+                # В случае ошибки с фото, отправляем только текст
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"Не удалось загрузить изображение.\n\n{text if text else 'Текст мема отсутствует.'}",
+                    reply_markup=reply_markup
+                )
+                # Помечаем проблемный мем
+                if meme_id in memes_collection:
+                    logger.warning(f"Удаляем проблемный мем {meme_id} из коллекции из-за ошибки с изображением")
+                    rejected_memes[meme_id] = memes_collection.pop(meme_id)
+                    save_memes_to_cache()
+        else:
+            message = await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=text if text else "Текст мема отсутствует.",
+                reply_markup=reply_markup
+            )
+        
+        # Обновляем состояние пользователя
+        user_states[user_id]["current_meme"] = meme_id
+        user_states[user_id]["viewed_memes"].append(meme_id)
+        
+        # Записываем просмотр в аналитику
+        try:
+            meme_analytics.record_meme_view(meme_id, user_id)
+        except Exception as e:
+            logger.error(f"Ошибка при записи просмотра мема в аналитику: {e}")
+        
+        # Логируем информацию о показанном меме
+        logger.info(f"Отправлен мем {meme_id} пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке мема: {e}")
+        # В случае ошибки с текущим мемом, попробуем другой
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Произошла ошибка при загрузке мема. Давайте попробуем другой!"
+        )
+        # Помечаем проблемный мем
+        if meme_id in memes_collection:
+            logger.warning(f"Удаляем проблемный мем {meme_id} из коллекции")
+            rejected_memes[meme_id] = memes_collection.pop(meme_id)
+            save_memes_to_cache()
+        
+        # Рекурсивно вызываем функцию еще раз для отправки другого мема
+        if meme_id in user_states[user_id]["viewed_memes"]:
+            user_states[user_id]["viewed_memes"].remove(meme_id)
+        
+        # Защита от рекурсивных вызовов - счетчик попыток
+        retry_count = context.user_data.get("retry_count", 0) + 1
+        context.user_data["retry_count"] = retry_count
+        
+        if retry_count <= 3:  # Ограничиваем количество попыток
+            await send_random_meme(update, context)
+        else:
+            context.user_data["retry_count"] = 0  # Сбрасываем счетчик
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="К сожалению, возникли проблемы с загрузкой мемов. Пожалуйста, попробуйте позже или используйте команду /start для перезапуска."
+            )
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик нажатий на кнопки рейтинга."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    data = query.data.split(":")
+    
+    if data[0] == "rate":
+        meme_id = data[1]
+        rating = int(data[2])
+        
+        # Обновляем рейтинг мема в состоянии пользователя
+        if user_id in user_states:
+            if "ratings" not in user_states[user_id]:
+                user_states[user_id]["ratings"] = {}
+            user_states[user_id]["ratings"][meme_id] = rating
+            
+            # Обновляем предпочтения пользователя для рекомендаций
+            try:
+                # Проверяем, существует ли мем в коллекции
+                if meme_id in memes_collection:
+                    update_user_preferences(user_id, meme_id, rating, memes_collection)
+                else:
+                    logger.warning(f"Мем {meme_id} не найден в коллекции при обновлении предпочтений")
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении предпочтений пользователя: {e}")
+            
+            # Записываем оценку в аналитику
+            try:
+                meme_analytics.record_meme_rating(meme_id, user_id, rating)
+            except Exception as e:
+                logger.error(f"Ошибка при записи оценки мема в аналитику: {e}")
+        
+        # Отправляем следующий мем
+        context.user_data["retry_count"] = 0  # Сбрасываем счетчик попыток
+        await send_random_meme(update, context)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /help."""
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            "🔍 Помощь по командам бота:\n\n"
+            "/start - Начать просмотр мемов\n"
+            "/next - Пропустить текущий мем и показать следующий\n"
+            "/help - Показать эту справку\n"
+            "/stats - Показать вашу статистику\n"
+            "/report - Сообщить о рекламном меме\n"
+            "/recommend - Получить персонализированные рекомендации"
+        )
+    )
+
+async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /next для пропуска текущего мема."""
+    context.user_data["retry_count"] = 0  # Сбрасываем счетчик попыток
+    await send_random_meme(update, context)
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /stats для показа статистики мемов."""
+    user_id = update.effective_user.id
+    
+    if user_id not in user_states:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="У вас ещё нет статистики. Начните смотреть и оценивать мемы!"
+        )
+        return
+    
+    # Получаем статистику пользователя
+    viewed_count = len(user_states[user_id].get("viewed_memes", []))
+    ratings = user_states[user_id].get("ratings", {})
+    positive_ratings = sum(1 for r in ratings.values() if r > 0)
+    negative_ratings = sum(1 for r in ratings.values() if r < 0)
+    
+    # Получаем рекомендации и предпочтения
+    try:
+        # Получаем статистику предпочтений пользователя
+        preferences_stats = get_user_preferences_stats(user_id)
+        
+        # Получаем анализ истории просмотров
+        history_analysis = analyze_user_history(user_id, memes_collection)
+        
+        # Предпочтительные темы
+        favorite_topics = history_analysis.get("favorite_topics", [])
+        topics_str = ", ".join(favorite_topics[:3]) if favorite_topics else "Офис"
+        
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                "📊 Ваша статистика:\n\n"
+                f"Просмотрено мемов: {viewed_count}\n"
+                f"Поставлено лайков: {positive_ratings}\n"
+                f"Поставлено дизлайков: {negative_ratings}\n\n"
+                f"Ваши предпочтения: {topics_str}\n\n"
+                "Используйте /recommend для получения персонализированных мемов!"
+            )
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при получении статистики: {e}")
+        
+        # Упрощенная статистика в случае ошибки
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                "📊 Ваша статистика:\n\n"
+                f"Просмотрено мемов: {viewed_count}\n"
+                f"Поставлено лайков: {positive_ratings}\n"
+                f"Поставлено дизлайков: {negative_ratings}"
+            )
+        )
+
+async def report_ad_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /report для отметки мема как рекламного."""
+    user_id = update.effective_user.id
+    
+    if user_id not in user_states or "current_meme" not in user_states[user_id]:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Нет активного мема для жалобы. Начните просмотр с /start и потом используйте /report."
+        )
+        return
+    
+    meme_id = user_states[user_id]["current_meme"]
+    
+    if meme_id in memes_collection:
+        # Перемещаем мем из основной коллекции в отклоненные
+        rejected_memes[meme_id] = memes_collection.pop(meme_id)
+        save_memes_to_cache()
+        
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Спасибо! Мы отметили этот мем как рекламный и больше не будем его показывать."
+        )
+        
+        # Отправляем новый мем
+        context.user_data["retry_count"] = 0  # Сбрасываем счетчик попыток
+        await send_random_meme(update, context)
+    else:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Не удалось найти текущий мем. Возможно, он уже был удален."
+        )
+
+async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /recommend для предоставления персонализированных рекомендаций."""
+    user_id = update.effective_user.id
+    
+    if user_id not in user_states:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Пожалуйста, просмотрите и оцените несколько мемов, чтобы мы могли дать рекомендации."
+        )
+        return
+    
+    ratings = user_states[user_id].get("ratings", {})
+    
+    if len(ratings) < 5:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Пожалуйста, оцените еще мемов. Нужно минимум 5 оценок, а у вас {len(ratings)}."
+        )
+        return
+    
+    try:
+        # Получаем персонализированные рекомендации
+        recommended_memes = recommend_memes(user_id, memes_collection, 1)
+        
+        if not recommended_memes:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="К сожалению, не удалось сформировать рекомендации. Попробуйте оценить больше мемов."
+            )
+            return
+        
+        # Берем первую рекомендацию
+        meme_id = recommended_memes[0]
+        
+        # Проверяем, что мем существует в коллекции
+        if meme_id not in memes_collection:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Произошла ошибка. Рекомендованный мем недоступен."
+            )
+            return
+        
+        meme = memes_collection[meme_id]
+        
+        # Создаем клавиатуру для оценки
+        keyboard = [
+            [
+                InlineKeyboardButton("👍", callback_data=f"rate:{meme_id}:1"),
+                InlineKeyboardButton("👎", callback_data=f"rate:{meme_id}:-1")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Отправляем рекомендованный мем
+        text = meme.get("text", "")
+        image_url = meme.get("image_url", "")
+        
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="🔍 Вот мем, который может вам понравиться:"
+        )
+        
+        try:
+            if image_url:
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=image_url,
+                    caption=text,
+                    reply_markup=reply_markup
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=text if text else "Текст мема отсутствует.",
+                    reply_markup=reply_markup
+                )
+            
+            # Обновляем состояние пользователя
+            user_states[user_id]["current_meme"] = meme_id
+            user_states[user_id]["viewed_memes"].append(meme_id)
+            
+            # Записываем просмотр в аналитику
+            try:
+                meme_analytics.record_meme_view(meme_id, user_id)
+            except Exception as e:
+                logger.error(f"Ошибка при записи просмотра рекомендованного мема в аналитику: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке рекомендованного мема: {e}")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Произошла ошибка при отправке рекомендованного мема. Пожалуйста, попробуйте позже."
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при получении рекомендаций: {e}")
+        
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Произошла ошибка при формировании рекомендаций. Пожалуйста, попробуйте позже."
+        )
+
+def is_bot_already_running():
+    """Проверяет, запущен ли уже бот, используя сокет для определения единственного экземпляра"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result = False
+    try:
+        # Пытаемся занять порт 65432 - если не можем, значит другая копия бота уже запущена
+        sock.bind(('localhost', 65432))
+        sock.listen(1)
+    except socket.error:
+        logger.warning("Другой экземпляр бота уже работает (порт 65432 занят)")
+        result = True
+    return result
+
+def main():
+    """Основная функция для запуска бота"""
+    # Проверяем, запущен ли уже бот
+    if is_bot_already_running():
+        logger.warning("Обнаружен работающий экземпляр бота. Завершаем текущий запуск.")
+        sys.exit(0)
+    
+    # Регистрируем обработчик сигналов
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    logger.info("=== ЗАПУСК TELEGRAM БОТА НА RAILWAY ===")
+    
+    # Загружаем аналитические данные
+    try:
+        # Загружаем данные для аналитики
+        meme_analytics._load_analytics_files()
+        logger.info("Аналитические данные успешно загружены")
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке аналитических данных: {e}")
+    
+    # Загружаем кэш мемов
+    cache_loaded = load_memes_from_cache()
+    
+    # Если кэш не загружен, инициализируем из встроенной коллекции
+    if not cache_loaded or not memes_collection:
+        logger.info("Кэш мемов не загружен, инициализируем из встроенной коллекции")
+        init_default_memes()
+    
+    logger.info(f"Доступно {len(memes_collection)} мемов после агрессивной фильтрации рекламы")
+    logger.info(f"Отклонено {len(rejected_memes)} мемов как рекламные")
+    
+    # Получаем токен бота из переменных окружения
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN не найден в переменных окружения")
+        sys.exit(1)
+    
+    # Запускаем поток обновления мемов
+    update_thread = threading.Thread(target=update_memes)
+    update_thread.daemon = True
+    update_thread.start()
+    
+    # Создаем приложение бота с уникальным именем для предотвращения конфликтов
+    application = Application.builder().token(token).build()
+    
+    # Регистрируем обработчики команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("next", next_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("report", report_ad_command))
+    application.add_handler(CommandHandler("recommend", recommend_command))
+    
+    # Регистрируем обработчик кнопок
+    application.add_handler(CallbackQueryHandler(button_callback))
+    
+    try:
+        # Запускаем бота с перехватом возможной ошибки конфликта
+        logger.info("Запуск бота в режиме polling...")
+        # Добавляем параметры для предотвращения конфликтов при получении обновлений
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            close_loop=False
+        )
+    except telegram.error.Conflict as conflict_error:
+        logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}. Другой экземпляр бота уже запущен.")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

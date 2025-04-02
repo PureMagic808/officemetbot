@@ -1,2 +1,1 @@
-
-web: python bot_railway.py
+web: /usr/bin/python3 bot_railway.py

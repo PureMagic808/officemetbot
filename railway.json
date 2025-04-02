@@ -3,10 +3,10 @@
     "schema": "https://railway.app/railway.schema.json",
     "build": {
         "builder": "NIXPACKS",
-        "buildCommand": "/usr/local/bin/python -m pip install -r requirements_railway.txt"
+        "buildCommand": "python3 -m pip install -r requirements_railway.txt"
     },
     "deploy": {
-        "startCommand": "/usr/local/bin/python bot_railway.py",
+        "startCommand": "python3 bot_railway.py",
         "restartPolicyType": "ON_FAILURE",
         "restartPolicyMaxRetries": 10
     }

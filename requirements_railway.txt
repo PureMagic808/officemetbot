@@ -1,4 +1,4 @@
-
+python==3.13.3
 python-telegram-bot==20.6
 vk-api==11.9.9
 Pillow==10.0.0

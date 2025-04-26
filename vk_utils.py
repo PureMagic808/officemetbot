@@ -1,304 +1,140 @@
-#!/usr/bin/env python3
-"""
-Утилиты для взаимодействия с VK API для получения мемов.
-Исправленная версия с улучшенной обработкой ошибок доступа к закрытым группам.
-"""
-import random
-import logging
-import time
-import requests
-from typing import Tuple, List, Optional
 
-# Настройка логирования
+import vk_api
+import random
+import requests
+from io import BytesIO
+from PIL import Image
+import logging
+import os
+
 logger = logging.getLogger(__name__)
 
 class VKMemesFetcher:
-    """Класс для получения мемов из VK"""
+    def __init__(self, vk_token):
+        self.vk_session = vk_api.VkApi(token=vk_token)
+        self.vk = self.vk_session.get_api()
+        self.sent_memes = set()  # Кэш для хранения отправленных мемов
+        self.meme_dislikes = {}  # Словарь для хранения дизлайков
+        self.max_dislikes = 15  # Максимальное количество дизлайков
+        
+    # Константы для обработки ошибок
+    DEFAULT_ERROR_IMAGE = "https://i.imgur.com/dNKhgfT.png"
+    DEFAULT_ERROR_TEXT = "Не удалось загрузить мем. Попробуйте еще раз."
     
-    def __init__(self, token: str):
-        """
-        Инициализация клиента VK API.
-        
-        Args:
-            token (str): API ключ для доступа к VK API
-        """
-        self.token = token
-        self.api_version = "5.131"
-        self.base_url = "https://api.vk.com/method/"
-        # Список публичных групп с мемами про офис, которые точно доступны без членства
-        self.default_group_ids = [88523457, 63997621, 161266689, 149279263, 185954822]
-        # Кэш для хранения доступных групп
-        self.accessible_groups = {}
-        # Проверяем доступные группы
-        self._initialize_accessible_groups()
-    
-    def _initialize_accessible_groups(self):
-        """Выполняет начальную проверку доступности групп"""
-        logger.info("Инициализация доступных групп VK...")
-        
-        # Проверяем дефолтные группы
-        for group_id in self.default_group_ids:
-            self._check_group_access(group_id)
-        
-        if not self.accessible_groups:
-            logger.warning("Не найдено доступных групп VK для получения мемов!")
-            # Добавляем стандартные публичные группы с мемами, которые гарантированно доступны
-            self.accessible_groups = {
-                88523457: True,  # Мемы: паблик с мемами
-                63997621: True,  # Лепра: публичная группа с мемами
-                161266689: True  # Мемы для офисного планктона
-            }
-        else:
-            logger.info(f"Доступные группы VK: {list(self.accessible_groups.keys())}")
-    
-    def _check_group_access(self, group_id: int) -> bool:
-        """
-        Проверяет доступность группы VK.
-        
-        Args:
-            group_id (int): ID группы VK
-            
-        Returns:
-            bool: True если группа доступна, False если нет
-        """
-        # Если группа уже проверена, возвращаем кэшированный результат
-        if group_id in self.accessible_groups:
-            return self.accessible_groups[group_id]
-        
-        # Параметры запроса
-        params = {
-            "access_token": self.token,
-            "v": self.api_version,
-            "owner_id": -group_id,  # Минус перед ID для обозначения группы
-            "count": 1  # Запрашиваем только 1 пост для проверки
-        }
-        
+    def get_random_meme(self, group_ids):
         try:
-            # Делаем запрос к API
-            response = requests.get(f"{self.base_url}wall.get", params=params)
-            data = response.json()
+            # Расширенный список групп с мемами про офис
+            office_group_ids = [
+                29534144,   # Офисный планктон
+                57846937,   # Мемы для офиса
+                209220261,  # HR-мемы
+                134304772,  # Суровый менеджмент
+                85585215,   # Офисный юмор
+                111463603,  # Работа в офисе
+                162742070,  # Офис на минималках
+                160951472   # Офисные приключения
+            ]
             
-            if "error" in data:
-                error_code = data["error"]["error_code"]
-                error_msg = data["error"]["error_msg"]
-                logger.warning(f"Группа {group_id} недоступна: [{error_code}] {error_msg}")
-                self.accessible_groups[group_id] = False
-                return False
-            
-            # Если дошли сюда, значит группа доступна
-            self.accessible_groups[group_id] = True
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка при проверке доступа к группе {group_id}: {e}")
-            self.accessible_groups[group_id] = False
-            return False
-    
-    def get_random_meme(self, group_ids: Optional[List[int]] = None) -> Tuple[str, str]:
-        """
-        Получает случайный мем из указанных групп VK.
-        
-        Args:
-            group_ids (List[int], optional): Список ID групп VK для поиска мемов
-            
-        Returns:
-            Tuple[str, str]: (URL изображения, текст)
-        """
-        # Если не указаны группы, используем дефолтные
-        if not group_ids:
-            group_ids = self.default_group_ids
-        
-        # Фильтруем только доступные группы
-        available_groups = []
-        for group_id in group_ids:
-            if self._check_group_access(group_id):
-                available_groups.append(group_id)
-        
-        # Если нет доступных групп, используем резервные
-        if not available_groups:
-            logger.warning("Все указанные группы недоступны! Используем резервные группы.")
-            available_groups = [gid for gid, accessible in self.accessible_groups.items() if accessible]
-            
-            # Если все еще нет доступных групп, используем дефолтные
-            if not available_groups:
-                available_groups = self.default_group_ids
-        
-        # Выбираем случайную группу
-        group_id = random.choice(available_groups)
-        
-        # Получаем случайный пост со стены группы
-        return self._get_random_post_with_photo(group_id)
-    
-    def _get_random_post_with_photo(self, group_id: int) -> Tuple[str, str]:
-        """
-        Получает случайный пост с фото со стены группы.
-        
-        Args:
-            group_id (int): ID группы VK
-            
-        Returns:
-            Tuple[str, str]: (URL изображения, текст)
-        """
-        # Проверяем доступность группы
-        if not self._check_group_access(group_id):
-            logger.warning(f"Группа {group_id} недоступна, пропускаем")
-            return "", ""
-        
-        # Параметры запроса
-        params = {
-            "access_token": self.token,
-            "v": self.api_version,
-            "owner_id": -group_id,  # Минус перед ID для обозначения группы
-            "count": 50,  # Получаем 50 последних постов
-            "filter": "owner"  # Только посты от группы
-        }
-        
-        try:
-            # Делаем запрос к API
-            response = requests.get(f"{self.base_url}wall.get", params=params)
-            data = response.json()
-            
-            if "error" in data:
-                error_code = data["error"]["error_code"]
-                error_msg = data["error"]["error_msg"]
-                logger.error(f"Error fetching meme: [{error_code}] {error_msg}")
-                
-                # Если ошибка доступа, помечаем группу как недоступную
-                if error_code in [15, 30]:
-                    self.accessible_groups[group_id] = False
-                
-                return "", ""
-            
-            # Получаем список постов
-            posts = data.get("response", {}).get("items", [])
-            
-            # Фильтруем только посты с фото
-            posts_with_photos = []
-            for post in posts:
-                # Проверяем наличие вложений
-                if "attachments" in post:
-                    # Проверяем наличие фото во вложениях
-                    has_photo = any(att.get("type") == "photo" for att in post["attachments"])
-                    if has_photo:
-                        posts_with_photos.append(post)
-            
-            # Если есть посты с фото, выбираем случайный
-            if posts_with_photos:
-                post = random.choice(posts_with_photos)
-                
-                # Получаем текст поста
-                text = post.get("text", "")
-                
-                # Получаем URL фото
-                photo_url = ""
-                for attachment in post.get("attachments", []):
-                    if attachment.get("type") == "photo":
-                        photo = attachment.get("photo", {})
-                        # Получаем максимальное доступное разрешение
-                        sizes = photo.get("sizes", [])
-                        if sizes:
-                            # Сортируем размеры по убыванию площади
-                            sizes.sort(key=lambda s: s.get("width", 0) * s.get("height", 0), reverse=True)
-                            photo_url = sizes[0].get("url", "")
-                            break
-                
-                return photo_url, text
+            # Используем преимущественно группы про офис
+            if random.random() < 0.8 and office_group_ids:  # 80% шанс взять специальную группу
+                try_office_group = True
+                group_id = random.choice(office_group_ids)
             else:
-                logger.warning(f"Нет постов с фото в группе {group_id}")
-                return "", ""
-        except Exception as e:
-            logger.error(f"Ошибка при получении мема из группы {group_id}: {e}")
-            return "", ""
-    
-    def get_memes_from_group(self, group_id: int, count: int = 10) -> List[Tuple[str, str]]:
-        """
-        Получает несколько мемов из указанной группы.
-        
-        Args:
-            group_id (int): ID группы VK
-            count (int): Количество мемов для получения
-            
-        Returns:
-            List[Tuple[str, str]]: Список кортежей (URL изображения, текст)
-        """
-        # Проверяем доступность группы
-        if not self._check_group_access(group_id):
-            logger.warning(f"Группа {group_id} недоступна, пропускаем")
-            return []
-        
-        # Параметры запроса
-        params = {
-            "access_token": self.token,
-            "v": self.api_version,
-            "owner_id": -group_id,  # Минус перед ID для обозначения группы
-            "count": 100,  # Получаем 100 последних постов
-            "filter": "owner"  # Только посты от группы
-        }
-        
-        try:
-            # Делаем запрос к API
-            response = requests.get(f"{self.base_url}wall.get", params=params)
-            data = response.json()
-            
-            if "error" in data:
-                error_code = data["error"]["error_code"]
-                error_msg = data["error"]["error_msg"]
-                logger.error(f"Ошибка при получении мемов из группы {group_id}: [{error_code}] {error_msg}")
+                try_office_group = False
+                group_id = random.choice(group_ids)
                 
-                # Если ошибка доступа, помечаем группу как недоступную
-                if error_code in [15, 30]:
-                    self.accessible_groups[group_id] = False
-                
-                return []
+            posts = self.vk.wall.get(owner_id=-group_id, count=150)  # Увеличено количество постов
             
-            # Получаем список постов
-            posts = data.get("response", {}).get("items", [])
-            
-            # Фильтруем только посты с фото
+            # Фильтруем посты
             posts_with_photos = []
-            for post in posts:
-                # Проверяем наличие вложений
-                if "attachments" in post:
-                    # Проверяем наличие фото во вложениях
-                    has_photo = any(att.get("type") == "photo" for att in post["attachments"])
-                    if has_photo:
+            for post in posts['items']:
+                # Проверяем базовые условия
+                if not ('attachments' in post and any(att['type'] == 'photo' for att in post['attachments'])):
+                    continue
+                    
+                # Проверяем рекламные метки
+                if post.get('marked_as_ads', 0) or post.get('is_pinned', 0):
+                    continue
+                
+                # Проверка на минимальный размер текста (для мемов часто нужен текст)
+                text = post.get('text', '').lower()
+                if len(text.split()) < 3 and not try_office_group:
+                    continue
+                    
+                # Проверяем текст на рекламные слова (расширенный список)
+                ad_words = [
+                    'реклама', 'ads', 'купить', 'продажа', 'магазин', 'заказать', 
+                    'акция', 'скидка', 'распродажа', 'товар', 'цена', 'sale', 'shop',
+                    'доставка', 'заказ', 'бесплатно', 'руб', '₽', '$', 'подпишись',
+                    'подписывайтесь', 'заходите', 'вступайте', 'промо', 'промокод',
+                    'discount', 'offer', 'предложение', 'выгодно', 'дешево',
+                    'отзывы', 'тренировки', 'спорт', 'фитнес', 'gym', 'тренер',
+                    'маникюр', 'nail', 'ногти', 'волосы', 'стрижка', 'окрашивание',
+                    'макияж', 'косметика', 'мастер', 'салон', 'красоты',
+                    'заказывайте', 'звоните', 'записывайтесь', 'пишите',
+                    'консультация', 'специалист', 'эксперт', 'курс', 'тренинг'
+                ]
+                if any(word in text for word in ad_words):
+                    continue
+                
+                # Проверка на религиозный контент
+                religious_words = [
+                    'храм', 'церковь', 'бог', 'господ', 'молитв', 'православ',
+                    'христиан', 'вера', 'служение', 'духовн', 'священник', 'библи'
+                ]
+                if any(word in text for word in religious_words):
+                    continue
+                    
+                # Проверяем ссылки и внешние сервисы
+                if ('attachments' in post and 
+                    any(att.get('type') in ['link', 'market', 'app', 'poll'] for att in post['attachments'])):
+                    continue
+                    
+                # Если это офисная группа, ищем офисные ключевые слова
+                if try_office_group:
+                    office_words = [
+                        'офис', 'работа', 'босс', 'начальник', 'коллега', 'сотрудник',
+                        'зарплата', 'проект', 'отпуск', 'отдел', 'компания', 'корпоратив',
+                        'увольнение', 'совещание', 'встреча', 'дедлайн', 'кофе', 'перерыв',
+                        'документ', 'отчет', 'график', 'менеджер', 'клиент', 'переработка',
+                        'понедельник', 'пятница', 'выходной', 'будни', 'работать'
+                    ]
+                    # Добавляем пост только если есть хотя бы одно офисное слово в тексте
+                    if any(word in text for word in office_words):
                         posts_with_photos.append(post)
-            
-            # Если есть посты с фото, выбираем случайные
-            if posts_with_photos:
-                # Если постов меньше, чем запрошено, берем все
-                if len(posts_with_photos) <= count:
-                    selected_posts = posts_with_photos
                 else:
-                    # Иначе выбираем случайные
-                    selected_posts = random.sample(posts_with_photos, count)
+                    posts_with_photos.append(post)
+            
+            if not posts_with_photos:
+                return self.DEFAULT_ERROR_IMAGE, self.DEFAULT_ERROR_TEXT
                 
-                # Формируем результат
-                result = []
-                for post in selected_posts:
-                    # Получаем текст поста
-                    text = post.get("text", "")
-                    
-                    # Получаем URL фото
-                    photo_url = ""
-                    for attachment in post.get("attachments", []):
-                        if attachment.get("type") == "photo":
-                            photo = attachment.get("photo", {})
-                            # Получаем максимальное доступное разрешение
-                            sizes = photo.get("sizes", [])
-                            if sizes:
-                                # Сортируем размеры по убыванию площади
-                                sizes.sort(key=lambda s: s.get("width", 0) * s.get("height", 0), reverse=True)
-                                photo_url = sizes[0].get("url", "")
-                                break
-                    
-                    # Добавляем в результат, если есть URL фото
-                    if photo_url:
-                        result.append((photo_url, text))
+            post = random.choice(posts_with_photos)
+            photo = next(att for att in post['attachments'] if att['type'] == 'photo')
+            
+            # Get the largest photo size
+            sizes = photo['photo']['sizes']
+            max_size = max(sizes, key=lambda x: x['width'] * x['height'])
+            
+            url = max_size['url']
+            
+            # Создаем уникальный хеш на основе нескольких параметров
+            photo_id = str(photo['photo'].get('id', ''))
+            owner_id = str(photo['photo'].get('owner_id', ''))
+            access_key = str(photo['photo'].get('access_key', ''))
+            image_hash = hash(url + photo_id + owner_id + access_key)
+            
+            # Проверяем, не был ли этот мем уже отправлен
+            if image_hash in self.sent_memes:
+                return self.get_random_meme(group_ids)  # Рекурсивно пробуем получить другой мем
                 
-                return result
-            else:
-                logger.warning(f"Нет постов с фото в группе {group_id}")
-                return []
+            self.sent_memes.add(image_hash)  # Добавляем хеш в кэш
+            
+            # Если кэш слишком большой, очищаем его
+            if len(self.sent_memes) > 1000:
+                self.sent_memes.clear()
+                
+            return url, post.get('text', '')
+            
         except Exception as e:
-            logger.error(f"Ошибка при получении мемов из группы {group_id}: {e}")
-            return []
+            logger.error(f"Error fetching meme: {e}")
+            return None, str(e)

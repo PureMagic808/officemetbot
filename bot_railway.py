@@ -17,6 +17,14 @@ import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
+# Импортируем модули для работы с HTTP и изображениями
+import requests
+from io import BytesIO
+try:
+    from PIL import Image
+except ImportError:
+    pass  # PIL может быть недоступен в некоторых средах
+
 # Импортируем собственные модули
 from meme_data import MEMES, MEME_SOURCES
 from advanced_filter import is_suitable_meme_advanced
@@ -404,6 +412,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Отправляем первый мем
     await send_random_meme(update, context)
 
+async def download_and_save_image(image_url, file_name="temp_image.jpg"):
+    """
+    Скачивает изображение и сохраняет его локально.
+    Возвращает путь к файлу или None, если загрузка не удалась.
+    """
+    try:
+        response = requests.get(image_url, timeout=10)
+        if response.status_code == 200:
+            # Сохраняем изображение во временный файл
+            with open(file_name, 'wb') as f:
+                f.write(response.content)
+            return file_name
+        else:
+            logger.error(f"Не удалось скачать изображение, статус: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Ошибка при скачивании изображения: {e}")
+        return None
+
 async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет случайный мем пользователю."""
     user = update.effective_user
@@ -527,24 +554,57 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     
             except Exception as img_fetch_error:
                 logger.error(f"Не удалось загрузить изображение: {img_fetch_error}")
-                # Пробуем отправить просто по URL без предварительной загрузки
+                
+                # Пробуем скачать изображение и сохранить локально, а затем отправить как файл
                 try:
-                    message = await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=image_url,
-                        caption=text,
-                        reply_markup=reply_markup
-                    )
-                    logger.info(f"Изображение отправлено напрямую через URL")
-                except Exception as direct_send_error:
-                    logger.error(f"Не удалось отправить изображение напрямую: {direct_send_error}")
-                    # Если не удалось отправить изображение, отправляем только текст
-                    message = await context.bot.send_message(
-                        chat_id=update.effective_chat.id,
-                        text=f"⚠️ Не удалось загрузить изображение\n\n{text}",
-                        reply_markup=reply_markup
-                    )
-                    logger.info(f"Отправлен только текст мема вместо изображения")
+                    logger.info("Пробуем альтернативный метод: скачать и отправить как файл")
+                    # Генерируем уникальное имя файла на основе ID мема
+                    temp_file_name = f"temp_image_{meme_id}.jpg"
+                    
+                    # Скачиваем и сохраняем изображение
+                    file_path = await download_and_save_image(image_url, temp_file_name)
+                    
+                    if file_path:
+                        # Отправляем изображение из файла
+                        with open(file_path, 'rb') as img_file:
+                            message = await context.bot.send_photo(
+                                chat_id=update.effective_chat.id,
+                                photo=img_file,
+                                caption=text,
+                                reply_markup=reply_markup
+                            )
+                            logger.info(f"Изображение успешно отправлено через локальный файл: {file_path}")
+                        
+                        # Удаляем временный файл
+                        try:
+                            os.remove(file_path)
+                            logger.info(f"Временный файл удален: {file_path}")
+                        except Exception as file_error:
+                            logger.error(f"Ошибка при удалении временного файла: {file_error}")
+                    else:
+                        raise Exception("Не удалось скачать изображение во временный файл")
+                        
+                except Exception as file_method_error:
+                    logger.error(f"Ошибка при использовании метода с файлом: {file_method_error}")
+                    
+                    # Пробуем отправить просто по URL без предварительной загрузки
+                    try:
+                        message = await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=image_url,
+                            caption=text,
+                            reply_markup=reply_markup
+                        )
+                        logger.info(f"Изображение отправлено напрямую через URL")
+                    except Exception as direct_send_error:
+                        logger.error(f"Не удалось отправить изображение напрямую: {direct_send_error}")
+                        # Если не удалось отправить изображение, отправляем только текст
+                        message = await context.bot.send_message(
+                            chat_id=update.effective_chat.id,
+                            text=f"⚠️ Не удалось загрузить изображение\n\n{text}",
+                            reply_markup=reply_markup
+                        )
+                        logger.info(f"Отправлен только текст мема вместо изображения")
         else:
             # Если у мема нет изображения, отправляем только текст
             message = await context.bot.send_message(
@@ -791,11 +851,7 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         if image_url:
             try:
-                import requests
-                from io import BytesIO
-                from PIL import Image
-                
-                # Пробуем сначала получить изображение и проверить его
+                # Пробуем сначала получить изображение и отправить как файл
                 try:
                     logger.info(f"Загрузка рекомендованного изображения по URL: {image_url}")
                     response = requests.get(image_url, timeout=10, stream=True)
@@ -817,14 +873,51 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                         raise Exception(f"Статус: {response.status_code}")
                 except Exception as img_error:
                     logger.error(f"Ошибка при обработке рекомендованного изображения: {img_error}")
-                    # Пробуем отправить напрямую по URL
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=image_url,
-                        caption=text,
-                        reply_markup=reply_markup
-                    )
-                    logger.info("Рекомендованное изображение отправлено напрямую через URL")
+                    
+                    # Пробуем скачать и сохранить изображение локально, затем отправить
+                    try:
+                        logger.info("Пробуем альтернативный метод для рекомендованного изображения: скачать и отправить как файл")
+                        # Генерируем уникальное имя файла
+                        temp_file_name = f"temp_rec_image_{meme_id}.jpg"
+                        
+                        # Скачиваем и сохраняем изображение
+                        file_path = await download_and_save_image(image_url, temp_file_name)
+                        
+                        if file_path:
+                            # Отправляем изображение из файла
+                            with open(file_path, 'rb') as img_file:
+                                await context.bot.send_photo(
+                                    chat_id=update.effective_chat.id,
+                                    photo=img_file,
+                                    caption=text,
+                                    reply_markup=reply_markup
+                                )
+                                logger.info(f"Рекомендованное изображение успешно отправлено через локальный файл: {file_path}")
+                            
+                            # Удаляем временный файл
+                            try:
+                                os.remove(file_path)
+                                logger.info(f"Временный файл удален: {file_path}")
+                            except Exception as file_error:
+                                logger.error(f"Ошибка при удалении временного файла: {file_error}")
+                        else:
+                            raise Exception("Не удалось скачать рекомендованное изображение во временный файл")
+                    
+                    except Exception as alt_method_error:
+                        logger.error(f"Ошибка при использовании альтернативного метода: {alt_method_error}")
+                        
+                        # Пробуем отправить напрямую по URL как последний вариант
+                        try:
+                            await context.bot.send_photo(
+                                chat_id=update.effective_chat.id,
+                                photo=image_url,
+                                caption=text,
+                                reply_markup=reply_markup
+                            )
+                            logger.info("Рекомендованное изображение отправлено напрямую через URL")
+                        except Exception as direct_error:
+                            logger.error(f"Не удалось отправить изображение напрямую: {direct_error}")
+                            raise
             except Exception as send_error:
                 logger.error(f"Не удалось отправить рекомендованное изображение: {send_error}")
                 # В случае неудачи отправляем только текст

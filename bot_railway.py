@@ -12,6 +12,10 @@ import random
 import json
 from datetime import datetime
 
+import vk_api
+vk_token = os.getenv("594a71c9594a71c9594a71c9275a6721c55594a594a71c93e9627edf547c68fea6cadcb")  # Получение токена из переменной окружения
+vk_session = vk_api.VkApi(token=vk_token
+
 # Для работы с Telegram API
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error

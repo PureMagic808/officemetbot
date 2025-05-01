@@ -58,21 +58,12 @@ rejected_memes = {}
 
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
-MIN_MEMES_COUNT = 50    # Минимальное количество мемов
+MIN_MEMES_COUNT = 10    # Минимальное количество мемов (уменьшено для быстрого перехода к MEMES)
 MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
 
-# Публичные группы VK для мемов, синхронизированные с MEME_SOURCES
+# Публичные группы VK для мемов, временно оставлена только одна группа
 VK_GROUP_IDS = [
-    212383311,  # public212383311 (Мемы для офисных работников)
-    189934484,  # office_rat (предположительный ID, уточните)
-    177133249,  # corporateethics
-    211736252,  # club211736252 (Нетворкинг мемы)
-    197824345,  # hr_mem
-    167608937,  # workbench_mem
-    159672532,  # the_working_day
-    148463127,  # office.mems
-    149391075,  # zapiskibezdushi
-    29534144,   # office_plankton
+    29534144,   # office_plankton (предположительно доступна)
 ]
 
 # Флаг для управления процессом обновления
@@ -166,20 +157,24 @@ def init_default_memes():
     
     # Сначала пытаемся загрузить мемы из VK
     for group_id in VK_GROUP_IDS:
-        memes = fetch_vk_memes(group_id, count=10)
-        for meme in memes:
-            meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
-            if meme_id in memes_collection or meme_id in rejected_memes:
-                continue
-            if validate_image(meme["image_url"]) and is_suitable_meme(meme):
-                memes_collection[meme_id] = meme
-                count_added += 1
-                logger.info(f"Добавлен мем {meme_id}")
-            else:
-                rejected_memes[meme_id] = meme
-                count_rejected += 1
-                logger.info(f"Отклонен мем {meme_id} как неподходящий или с недоступным изображением")
-        time.sleep(random.uniform(0.5, 1))  # Задержка для лимитов
+        try:
+            memes = fetch_vk_memes(group_id, count=10, vk_session=vk_session)
+            for meme in memes:
+                meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
+                if meme_id in memes_collection or meme_id in rejected_memes:
+                    continue
+                if validate_image(meme["image_url"]) and is_suitable_meme(meme):
+                    memes_collection[meme_id] = meme
+                    count_added += 1
+                    logger.info(f"Добавлен мем {meme_id}")
+                else:
+                    rejected_memes[meme_id] = meme
+                    count_rejected += 1
+                    logger.info(f"Отклонен мем {meme_id} как неподходящий или с недоступным изображением")
+            time.sleep(random.uniform(0.5, 1))  # Задержка для лимитов
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
+            continue
     
     # Если не удалось загрузить достаточно мемов из VK, используем MEMES
     if count_added < MIN_MEMES_COUNT:
@@ -205,7 +200,7 @@ def init_default_memes():
 def try_fetch_memes_from_vk():
     """Проверяет возможность получения мемов из VK"""
     try:
-        test_memes = fetch_vk_memes(VK_GROUP_IDS[0], count=1)
+        test_memes = fetch_vk_memes(VK_GROUP_IDS[0], count=1, vk_session=vk_session)
         return len(test_memes) > 0
     except Exception as e:
         logger.error(f"Ошибка при тестовом вызове VK API: {e}")
@@ -249,24 +244,26 @@ def fetch_and_add_new_memes(group_id, count=10):
     logger.info(f"Получение {count} новых мемов из группы {group_id}...")
     new_memes_count = 0
     rejected_count = 0
-    memes = fetch_vk_memes(group_id, count)
-    
-    for meme in memes:
-        meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
-        if meme_id in memes_collection or meme_id in rejected_memes:
-            logger.debug(f"Мем {meme_id} уже существует")
-            continue
-        
-        image_valid = validate_image(meme["image_url"])
-        meme_suitable = is_suitable_meme(meme)
-        if image_valid and meme_suitable:
-            memes_collection[meme_id] = meme
-            new_memes_count += 1
-            logger.info(f"Добавлен новый мем {meme_id}")
-        else:
-            rejected_memes[meme_id] = meme
-            rejected_count += 1
-            logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}")
+    try:
+        memes = fetch_vk_memes(group_id, count, vk_session=vk_session)
+        for meme in memes:
+            meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
+            if meme_id in memes_collection or meme_id in rejected_memes:
+                logger.debug(f"Мем {meme_id} уже существует")
+                continue
+            
+            image_valid = validate_image(meme["image_url"])
+            meme_suitable = is_suitable_meme(meme)
+            if image_valid and meme_suitable:
+                memes_collection[meme_id] = meme
+                new_memes_count += 1
+                logger.info(f"Добавлен новый мем {meme_id}")
+            else:
+                rejected_memes[meme_id] = meme
+                rejected_count += 1
+                logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}")
+    except Exception as e:
+        logger.error(f"Ошибка при получении мемов из группы {group_id}: {e}")
     
     logger.info(f"Получено {new_memes_count} новых мемов, отклонено {rejected_count}")
     return new_memes_count

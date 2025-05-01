@@ -36,6 +36,7 @@ from recommendation_engine import (
     analyze_user_history
 )
 import meme_analytics
+from vk_utils import fetch_vk_memes
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO,
@@ -57,12 +58,23 @@ memes_collection = {}
 rejected_memes = {}
 
 # Конфигурация обновления мемов
-UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут для реального времени)
+UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
 MIN_MEMES_COUNT = 50    # Минимальное количество мемов
 MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
 
-# Публичные группы VK для мемов
-VK_GROUP_IDS = [22822305, 45745333, 29534144, 208845191]  # Мемы, MDK, Орлёнок, Лепра
+# Публичные группы VK для мемов, синхронизированные с MEME_SOURCES
+VK_GROUP_IDS = [
+    212383311,  # public212383311 (Мемы для офисных работников)
+    189934484,  # office_rat
+    177133249,  # corporateethics
+    211736252,  # club211736252 (Нетворкинг мемы)
+    197824345,  # hr_mem
+    167608937,  # workbench_mem
+    159672532,  # the_working_day
+    148463127,  # office.mems
+    149391075,  # zapiskibezdushi
+    29534144,   # office_plankton
+]
 
 # Флаг для управления процессом обновления
 update_thread_running = False
@@ -147,12 +159,13 @@ def validate_image(image_url):
         return False
 
 def init_default_memes():
-    """Инициализирует базовый набор мемов из VK API"""
+    """Инициализирует базовый набор мемов из VK API или статической коллекции MEMES"""
     global memes_collection, rejected_memes
-    logger.info("Инициализация стандартного набора мемов из VK")
+    logger.info("Инициализация стандартного набора мемов")
     count_added = 0
     count_rejected = 0
     
+    # Сначала пытаемся загрузить мемы из VK
     for group_id in VK_GROUP_IDS:
         memes = fetch_vk_memes(group_id, count=10)
         for meme in memes:
@@ -168,6 +181,24 @@ def init_default_memes():
                 count_rejected += 1
                 logger.info(f"Отклонен мем {meme_id} как неподходящий или с недоступным изображением")
         time.sleep(random.uniform(0.5, 1))  # Задержка для лимитов
+    
+    # Если не удалось загрузить достаточно мемов из VK, используем MEMES
+    if count_added < MIN_MEMES_COUNT:
+        logger.info("Недостаточно мемов из VK, загружаем из статической коллекции MEMES")
+        for meme_id, meme in MEMES.items():
+            if meme_id in memes_collection or meme_id in rejected_memes:
+                continue
+            # Добавляем timestamp для совместимости
+            meme = meme.copy()
+            meme['timestamp'] = datetime.now().isoformat()
+            if validate_image(meme["image_url"]) and is_suitable_meme_advanced(meme, strict_mode=True):
+                memes_collection[meme_id] = meme
+                count_added += 1
+                logger.info(f"Добавлен статический мем {meme_id}")
+            else:
+                rejected_memes[meme_id] = meme
+                count_rejected += 1
+                logger.info(f"Отклонен статический мем {meme_id}")
     
     logger.info(f"Инициализировано {count_added} подходящих мемов и {count_rejected} отклоненных мемов")
     return count_added > 0
@@ -188,7 +219,7 @@ def update_memes():
     logger.info("Запущен поток обновления мемов")
     
     if not try_fetch_memes_from_vk():
-        logger.warning("VK API недоступен, используем кэш")
+        logger.warning("VK API недоступен, используем кэш или статические мемы")
         if not memes_collection:
             init_default_memes()
             save_memes_to_cache()
@@ -642,7 +673,7 @@ def main():
     
     cache_loaded = load_memes_from_cache()
     if not cache_loaded or not memes_collection:
-        logger.info("Кэш мемов не загружен, инициализируем из VK")
+        logger.info("Кэш мемов не загружен, инициализируем")
         init_default_memes()
     
     logger.info(f"Доступно {len(memes_collection)} мемов после фильтрации")

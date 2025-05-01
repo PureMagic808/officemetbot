@@ -27,8 +27,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Импортируем собственные модули
-from meme_data import MEMES, MEME_SOURCES
-from advanced_filter import is_suitable_meme_advanced
+from meme_data import MEMES, MEME_SOURCES, is_suitable_meme
 from recommendation_engine import (
     update_user_preferences, 
     recommend_memes, 
@@ -65,7 +64,7 @@ MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемо
 # Публичные группы VK для мемов, синхронизированные с MEME_SOURCES
 VK_GROUP_IDS = [
     212383311,  # public212383311 (Мемы для офисных работников)
-    189934484,  # office_rat
+    189934484,  # office_rat (предположительный ID, уточните)
     177133249,  # corporateethics
     211736252,  # club211736252 (Нетворкинг мемы)
     197824345,  # hr_mem
@@ -172,7 +171,7 @@ def init_default_memes():
             meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
             if meme_id in memes_collection or meme_id in rejected_memes:
                 continue
-            if validate_image(meme["image_url"]) and is_suitable_meme_advanced(meme, strict_mode=True):
+            if validate_image(meme["image_url"]) and is_suitable_meme(meme):
                 memes_collection[meme_id] = meme
                 count_added += 1
                 logger.info(f"Добавлен мем {meme_id}")
@@ -191,7 +190,7 @@ def init_default_memes():
             # Добавляем timestamp для совместимости
             meme = meme.copy()
             meme['timestamp'] = datetime.now().isoformat()
-            if validate_image(meme["image_url"]) and is_suitable_meme_advanced(meme, strict_mode=True):
+            if validate_image(meme["image_url"]) and is_suitable_meme(meme):
                 memes_collection[meme_id] = meme
                 count_added += 1
                 logger.info(f"Добавлен статический мем {meme_id}")
@@ -259,7 +258,7 @@ def fetch_and_add_new_memes(group_id, count=10):
             continue
         
         image_valid = validate_image(meme["image_url"])
-        meme_suitable = is_suitable_meme_advanced(meme, strict_mode=len(memes_collection) >= MIN_MEMES_COUNT)
+        meme_suitable = is_suitable_meme(meme)
         if image_valid and meme_suitable:
             memes_collection[meme_id] = meme
             new_memes_count += 1
@@ -304,23 +303,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     
     await send_random_meme(update, context)
-
-async def download_and_save_image(image_url, file_name="temp_image.jpg"):
-    """Скачивает изображение и сохраняет его локально"""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = requests.get(image_url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            with open(file_name, 'wb') as f:
-                f.write(response.content)
-            return file_name
-        logger.error(f"Не удалось скачать изображение, статус: {response.status_code}")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка при скачивании изображения: {e}")
-        return None
 
 async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет случайный мем пользователю."""

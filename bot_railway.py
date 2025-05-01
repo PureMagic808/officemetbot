@@ -125,33 +125,6 @@ def load_memes_from_cache():
         logger.error(f"Ошибка при загрузке мемов из кэша: {e}")
         return False
 
-def fetch_vk_memes(group_id, count=10):
-    """Получение мемов из публичного сообщества через VK API"""
-    try:
-        posts = vk.wall.get(owner_id=f"-{group_id}", count=count)
-        memes = []
-        for post in posts["items"]:
-            if "attachments" in post:
-                for attachment in post["attachments"]:
-                    if attachment["type"] == "photo":
-                        photo_url = attachment["photo"]["sizes"][-1]["url"]
-                        text = post.get("text", "")
-                        memes.append({
-                            "image_url": photo_url,
-                            "text": text,
-                            "source": f"vk_group_{group_id}",
-                            "tags": ["офис", "мем"],
-                            "timestamp": datetime.now().isoformat()
-                        })
-        logger.info(f"Получено {len(memes)} мемов из группы {group_id}")
-        return memes
-    except vk_api.ApiError as e:
-        logger.error(f"Ошибка VK API при получении мемов из группы {group_id}: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"Неизвестная ошибка при получении мемов: {e}")
-        return []
-
 def validate_image(image_url):
     """Проверяет доступность и валидность изображения"""
     try:
@@ -186,7 +159,7 @@ def init_default_memes():
             meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
             if meme_id in memes_collection or meme_id in rejected_memes:
                 continue
-            if validate_image(meme["image_url"]) and is_suitable_meme_advanced(meme):
+            if validate_image(meme["image_url"]) and is_suitable_meme_advanced(meme, strict_mode=True):
                 memes_collection[meme_id] = meme
                 count_added += 1
                 logger.info(f"Добавлен мем {meme_id}")
@@ -255,7 +228,7 @@ def fetch_and_add_new_memes(group_id, count=10):
             continue
         
         image_valid = validate_image(meme["image_url"])
-        meme_suitable = is_suitable_meme_advanced(meme)
+        meme_suitable = is_suitable_meme_advanced(meme, strict_mode=len(memes_collection) >= MIN_MEMES_COUNT)
         if image_valid and meme_suitable:
             memes_collection[meme_id] = meme
             new_memes_count += 1
@@ -789,5 +762,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-Я помогу доработать остальные файлы и довести бота до стабильной работы с реальным временем и без рекламы! 😊

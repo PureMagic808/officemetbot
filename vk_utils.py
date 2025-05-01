@@ -1,4 +1,3 @@
-
 import vk_api
 import random
 import requests
@@ -6,6 +5,7 @@ from io import BytesIO
 from PIL import Image
 import logging
 import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,15 @@ class VKMemesFetcher:
     DEFAULT_ERROR_IMAGE = "https://i.imgur.com/dNKhgfT.png"
     DEFAULT_ERROR_TEXT = "Не удалось загрузить мем. Попробуйте еще раз."
     
-    def get_random_meme(self, group_ids):
+    def get_random_meme(self, group_ids, try_office_group=True):
+        """
+        Получает один случайный мем из указанных групп VK.
+        Args:
+            group_ids (list): Список ID групп VK.
+            try_office_group (bool): Если True, отдаёт предпочтение офисным группам.
+        Returns:
+            tuple: (url, text, tags, source, timestamp) или (None, str) в случае ошибки.
+        """
         try:
             # Расширенный список групп с мемами про офис
             office_group_ids = [
@@ -36,14 +44,14 @@ class VKMemesFetcher:
             ]
             
             # Используем преимущественно группы про офис
-            if random.random() < 0.8 and office_group_ids:  # 80% шанс взять специальную группу
-                try_office_group = True
+            if try_office_group and random.random() < 0.8 and office_group_ids:
                 group_id = random.choice(office_group_ids)
+                source = f"vk_group_{group_id}_office"
             else:
-                try_office_group = False
                 group_id = random.choice(group_ids)
+                source = f"vk_group_{group_id}"
                 
-            posts = self.vk.wall.get(owner_id=-group_id, count=150)  # Увеличено количество постов
+            posts = self.vk.wall.get(owner_id=-group_id, count=150)
             
             # Фильтруем посты
             posts_with_photos = []
@@ -56,23 +64,13 @@ class VKMemesFetcher:
                 if post.get('marked_as_ads', 0) or post.get('is_pinned', 0):
                     continue
                 
-                # Проверка на минимальный размер текста (для мемов часто нужен текст)
+                # Проверка текста на рекламные слова (минимальная фильтрация)
                 text = post.get('text', '').lower()
-                if len(text.split()) < 3 and not try_office_group:
-                    continue
-                    
-                # Проверяем текст на рекламные слова (расширенный список)
                 ad_words = [
                     'реклама', 'ads', 'купить', 'продажа', 'магазин', 'заказать', 
                     'акция', 'скидка', 'распродажа', 'товар', 'цена', 'sale', 'shop',
                     'доставка', 'заказ', 'бесплатно', 'руб', '₽', '$', 'подпишись',
-                    'подписывайтесь', 'заходите', 'вступайте', 'промо', 'промокод',
-                    'discount', 'offer', 'предложение', 'выгодно', 'дешево',
-                    'отзывы', 'тренировки', 'спорт', 'фитнес', 'gym', 'тренер',
-                    'маникюр', 'nail', 'ногти', 'волосы', 'стрижка', 'окрашивание',
-                    'макияж', 'косметика', 'мастер', 'салон', 'красоты',
-                    'заказывайте', 'звоните', 'записывайтесь', 'пишите',
-                    'консультация', 'специалист', 'эксперт', 'курс', 'тренинг'
+                    'подписывайтесь', 'заходите', 'вступайте', 'промо', 'промокод'
                 ]
                 if any(word in text for word in ad_words):
                     continue
@@ -90,77 +88,110 @@ class VKMemesFetcher:
                     any(att.get('type') in ['link', 'market', 'app', 'poll'] for att in post['attachments'])):
                     continue
                     
-                # Если это офисная группа, ищем офисные ключевые слова
+                # Формируем теги
+                tags = ['мем', 'юмор']
                 if try_office_group:
+                    tags.append('офис')
                     office_words = [
                         'офис', 'работа', 'босс', 'начальник', 'коллега', 'сотрудник',
-                        'зарплата', 'проект', 'отпуск', 'отдел', 'компания', 'корпоратив',
-                        'увольнение', 'совещание', 'встреча', 'дедлайн', 'кофе', 'перерыв',
-                        'документ', 'отчет', 'график', 'менеджер', 'клиент', 'переработка',
-                        'понедельник', 'пятница', 'выходной', 'будни', 'работать'
+                        'зарплата', 'проект', 'отпуск', 'отдел', 'компания', 'корпоратив'
                     ]
-                    # Добавляем пост только если есть хотя бы одно офисное слово в тексте
                     if any(word in text for word in office_words):
                         posts_with_photos.append(post)
                 else:
                     posts_with_photos.append(post)
             
             if not posts_with_photos:
-                return self.DEFAULT_ERROR_IMAGE, self.DEFAULT_ERROR_TEXT
+                return None, self.DEFAULT_ERROR_TEXT
                 
             post = random.choice(posts_with_photos)
             photo = next(att for att in post['attachments'] if att['type'] == 'photo')
             
-            # Get the largest photo size
+            # Получаем самое большое изображение
             sizes = photo['photo']['sizes']
             max_size = max(sizes, key=lambda x: x['width'] * x['height'])
-            
             url = max_size['url']
             
             # Проверяем доступность URL
             try:
-                response = requests.head(url, timeout=5)
+                response = requests.get(url, timeout=5, stream=True)
                 if response.status_code != 200:
                     logger.warning(f"URL изображения недоступен: {url}, статус: {response.status_code}")
-                    return self.DEFAULT_ERROR_IMAGE, self.DEFAULT_ERROR_TEXT
-                
-                # Дополнительная проверка через GET-запрос для убеждения, что содержимое доступно
-                test_response = requests.get(url, timeout=5, stream=True)
-                if test_response.status_code != 200:
-                    logger.warning(f"Не удалось получить содержимое изображения: {url}, статус: {test_response.status_code}")
-                    return self.DEFAULT_ERROR_IMAGE, self.DEFAULT_ERROR_TEXT
+                    return None, self.DEFAULT_ERROR_TEXT
                 
                 # Проверяем, что это действительно изображение
                 try:
-                    img_data = BytesIO(test_response.content)
+                    img_data = BytesIO(response.content)
                     img = Image.open(img_data)
-                    img.verify()  # Проверяем целостность изображения
+                    img.verify()
                 except Exception as img_error:
                     logger.error(f"Получен неверный формат изображения: {img_error}")
-                    return self.DEFAULT_ERROR_IMAGE, self.DEFAULT_ERROR_TEXT
+                    return None, self.DEFAULT_ERROR_TEXT
                     
             except Exception as request_error:
                 logger.error(f"Ошибка при проверке URL изображения: {request_error}")
-                return self.DEFAULT_ERROR_IMAGE, self.DEFAULT_ERROR_TEXT
+                return None, self.DEFAULT_ERROR_TEXT
             
-            # Создаем уникальный хеш на основе нескольких параметров
+            # Создаём уникальный хеш
             photo_id = str(photo['photo'].get('id', ''))
             owner_id = str(photo['photo'].get('owner_id', ''))
             access_key = str(photo['photo'].get('access_key', ''))
             image_hash = hash(url + photo_id + owner_id + access_key)
             
-            # Проверяем, не был ли этот мем уже отправлен
+            # Проверяем, не был ли мем отправлен
             if image_hash in self.sent_memes:
-                return self.get_random_meme(group_ids)  # Рекурсивно пробуем получить другой мем
+                return self.get_random_meme(group_ids, try_office_group)
                 
-            self.sent_memes.add(image_hash)  # Добавляем хеш в кэш
-            
-            # Если кэш слишком большой, очищаем его
+            self.sent_memes.add(image_hash)
             if len(self.sent_memes) > 1000:
                 self.sent_memes.clear()
-                
-            return url, post.get('text', '')
+            
+            # Формируем временную метку
+            timestamp = datetime.fromtimestamp(post.get('date', int(time.time()))).isoformat()
+            
+            return url, post.get('text', ''), tags, source, timestamp
             
         except Exception as e:
-            logger.error(f"Error fetching meme: {e}")
+            logger.error(f"Ошибка при получении мема: {e}")
             return None, str(e)
+
+def fetch_vk_memes(group_id, count=10, vk_token=None):
+    """
+    Получает указанное количество мемов из группы VK.
+    Args:
+        group_id (int): ID группы VK (без минуса).
+        count (int): Количество мемов для получения.
+        vk_token (str): Токен VK API (если не передан, берётся из переменной окружения).
+    Returns:
+        list: Список словарей [{image_url, text, tags, source, timestamp}, ...].
+    """
+    if vk_token is None:
+        vk_token = os.getenv("VK_TOKEN")
+        if not vk_token:
+            logger.error("VK_TOKEN не задан в переменных окружения")
+            return []
+    
+    fetcher = VKMemesFetcher(vk_token)
+    memes = []
+    attempts = 0
+    max_attempts = count * 3  # Ограничение попыток
+    
+    while len(memes) < count and attempts < max_attempts:
+        result = fetcher.get_random_meme([group_id], try_office_group=True)
+        if result[0] is None:
+            attempts += 1
+            continue
+            
+        url, text, tags, source, timestamp = result
+        meme = {
+            "image_url": url,
+            "text": text,
+            "tags": tags,
+            "source": source,
+            "timestamp": timestamp
+        }
+        memes.append(meme)
+        attempts += 1
+    
+    logger.info(f"Получено {len(memes)} мемов из группы {group_id} за {attempts} попыток")
+    return memes

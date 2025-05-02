@@ -35,7 +35,7 @@ from recommendation_engine import (
     analyze_user_history
 )
 import meme_analytics
-from vk_utils import fetch_vk_memes
+from vk_utils import fetch_vk_memes, VK_GROUP_IDS
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO,
@@ -63,11 +63,6 @@ MIN_MEMES_COUNT = 10    # Минимальное количество мемов
 MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
 CONFLICT_RETRIES = 3    # Количество попыток при конфликте Telegram API
 CONFLICT_RETRY_DELAY = 5  # Задержка между попытками (сек)
-
-# Публичные группы VK для мемов
-VK_GROUP_IDS = [
-    29534144,   # office_plankton (проверить доступность)
-]
 
 # Флаг для управления процессом обновления
 update_thread_running = False
@@ -125,10 +120,6 @@ def load_memes_from_cache():
                             logger.info(f"Мем {meme_id} из кэша отклонён как неподходящий")
                     memes_collection = filtered_memes
                     logger.info(f"Загружено {len(memes_collection)} мемов из кэша после фильтрации")
-                    # Логируем содержимое для отладки
-                    for meme_id in list(memes_collection.keys())[:5]:
-                        meme = memes_collection[meme_id]
-                        logger.info(f"Мем из кэша: ID={meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
         
         if os.path.exists(REJECTED_CACHE_FILE):
             with open(REJECTED_CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -164,16 +155,15 @@ def validate_image(image_url):
         return False
 
 def init_default_memes():
-    """Инициализирует базовый набор мемов из VK API или статической коллекции MEMES"""
+    """Инициализирует базовый набор мемов из VK API"""
     global memes_collection, rejected_memes
-    logger.info("Инициализация стандартного набора мемов")
+    logger.info("Инициализация стандартного набора мемов из VK")
     count_added = 0
     count_rejected = 0
     
-    # Сначала пытаемся загрузить мемы из VK
-    for group_id in VK_GROUP_IDS:
+    for group_id in VK_GROUP_IDS:  # Используем группы из vk_utils.py
         try:
-            memes = fetch_vk_memes(group_id, count=10, vk_session=vk_session)
+            memes = fetch_vk_memes(group_id, count=20, vk_session=vk_session)
             for meme in memes:
                 meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
                 if meme_id in memes_collection or meme_id in rejected_memes:
@@ -186,27 +176,10 @@ def init_default_memes():
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
                     logger.info(f"Отклонен мем {meme_id} как неподходящий или с недоступным изображением")
-            time.sleep(random.uniform(0.5, 1))  # Задержка для лимитов
+            time.sleep(random.uniform(0.5, 1))
         except Exception as e:
             logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
             continue
-    
-    # Если не удалось загрузить достаточно мемов из VK, используем MEMES
-    if count_added < MIN_MEMES_COUNT:
-        logger.info("Недостаточно мемов из VK, загружаем из статической коллекции MEMES")
-        for meme_id, meme in MEMES.items():
-            if meme_id in memes_collection or meme_id in rejected_memes:
-                continue
-            meme = meme.copy()
-            meme['timestamp'] = datetime.now().isoformat()
-            if validate_image(meme["image_url"]) and is_suitable_meme(meme):
-                memes_collection[meme_id] = meme
-                count_added += 1
-                logger.info(f"Добавлен статический мем {meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
-            else:
-                rejected_memes[meme_id] = meme
-                count_rejected += 1
-                logger.info(f"Отклонен статический мем {meme_id}")
     
     logger.info(f"Инициализировано {count_added} подходящих мемов и {count_rejected} отклоненных мемов")
     return count_added > 0
@@ -227,7 +200,7 @@ def update_memes():
     logger.info("Запущен поток обновления мемов")
     
     if not try_fetch_memes_from_vk():
-        logger.warning("VK API недоступен, используем кэш или статические мемы")
+        logger.warning("VK API недоступен, используем кэш")
         if not memes_collection:
             init_default_memes()
             save_memes_to_cache()
@@ -332,6 +305,7 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             return
     
+    logger.info(f"Текущее количество мемов: {len(memes_collection)}")
     viewed_memes = user_states[user_id].get("viewed_memes", [])
     available_memes = [meme_id for meme_id in memes_collection if meme_id not in viewed_memes]
     
@@ -413,7 +387,7 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             meme_analytics.record_meme_view(meme_id, user_id)
         except Exception as e:
-            logger.error(f"Ошибка при записи просмотра мема: {e}")
+            logger.error(f"Ошибка при записи просмотра мema: {e}")
         logger.info(f"Отправлен мем {meme_id} пользователю {user_id}")
     
     except Exception as e:
@@ -714,22 +688,9 @@ def main():
     except Exception as e:
         logger.error(f"Ошибка при загрузке аналитических данных: {e}")
     
-    # Очистка кэша, если он содержит неподходящие мемы
-    if os.path.exists(MEMES_CACHE_FILE):
-        try:
-            with open(MEMES_CACHE_FILE, 'r', encoding='utf-8') as f:
-                cached_memes = json.load(f)
-                if any("новости" in meme.get("text", "").lower() or "news" in meme.get("tags", []) 
-                       for meme in cached_memes.values()):
-                    logger.warning("Обнаружены новостные мемы в кэше, очищаем кэш")
-                    os.remove(MEMES_CACHE_FILE)
-        except Exception as e:
-            logger.error(f"Ошибка при проверке кэша: {e}")
-            os.remove(MEMES_CACHE_FILE)
-    
-    cache_loaded = load_memes_from_cache()
-    if not cache_loaded or not memes_collection:
-        logger.info("Кэш мемов не загружен или пуст, инициализируем")
+    load_memes_from_cache()
+    if not memes_collection:
+        logger.info("Кэш мемов пуст, инициализируем")
         init_default_memes()
     
     logger.info(f"Доступно {len(memes_collection)} мемов после фильтрации")
@@ -788,7 +749,7 @@ def main():
                 connect_timeout=30,
                 read_timeout=30
             )
-            break  # Успешный запуск, выходим из цикла
+            break
         except telegram.error.Conflict as conflict_error:
             logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}")
             if attempt < CONFLICT_RETRIES - 1:

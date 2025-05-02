@@ -88,4 +88,3 @@ if __name__ == "__main__":
     memes = fetch_memes_from_all_groups(20)
     for meme in memes:
         logger.info(f"Мем: Text={meme['text'][:50]}, URL={meme['image_url']}")
-    return memes

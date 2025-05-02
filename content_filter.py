@@ -77,7 +77,17 @@ BLOCKED_CONTENT_TAGS = [
     "предложение",
     "sale",
     "скидка",
-    "распродажа"
+    "распродажа",
+    
+    # Новости и политика
+    "новости",
+    "политика",
+    "события",
+    "происшествия",
+    "news",
+    "politics",
+    "event",
+    "incident"
 ]
 
 DEFAULT_ERROR_IMAGE = "https://i.imgur.com/8KBR1h3.jpg"  # Замените на URL картинки с надписью "Извините, произошла ошибка"
@@ -147,10 +157,20 @@ BLOCKED_URL_PATTERNS = [
     "chef",
     "повар",
     "ресторан",
-    "меню"
+    "меню",
+    
+    # Новости и политика
+    "news",
+    "новости",
+    "politics",
+    "политика",
+    "event",
+    "события",
+    "incident",
+    "происшествия"
 ]
 
-# Список текстов, которые указывают на рекламный контент
+# Список текстов, которые указывают на рекламный или новостной контент
 BLOCKED_TEXT_PATTERNS = [
     # Спорт и фитнес
     "тренируйся вместе с нами",
@@ -203,11 +223,21 @@ BLOCKED_TEXT_PATTERNS = [
     "ресторан",
     "меню",
     "угорь чторру",
-    "шеф"
+    "шеф",
+    
+    # Новости и политика
+    "последние новости",
+    "срочные новости",
+    "новости дня",
+    "политические события",
+    "происшествие",
+    "события в мире",
+    "новостной канал",
+    "репортаж",
+    "журналист"
 ]
 
 # Специальные изображения, которые нужно отфильтровать
-# Эти хэши или фрагменты URL изображений гарантированно блокируются
 SPECIFIC_BLOCKED_IMAGES = [
     # Фитнес-реклама с тренировками
     "тренируйся-вместе-с-нами",
@@ -265,25 +295,36 @@ SPECIFIC_BLOCKED_IMAGES = [
     "рыба-повар",
     "рыба-шеф",
     "fish-chef",
-    "chef-sushi"
+    "chef-sushi",
+    
+    # Новости и политика
+    "news",
+    "новости",
+    "breaking-news",
+    "срочные-новости",
+    "politics",
+    "политика",
+    "event",
+    "события"
 ]
 
 # Характерные маркеры для конкретных рекламных изображений
 FITNESS_AD_MARKERS = ["розовые гантели", "новогодний", "фитнес", "спортзал", "тренировка"]
 NAIL_ART_MARKERS = ["розовый фон", "емельянова", "маникюр", "nail artist", "irina"]
 SUSHI_DELIVERY_MARKERS = ["рыба", "шеф", "повар", "роллы", "суши", "доставка", "угорь", "чторру"]
+NEWS_MARKERS = ["новости", "news", "политика", "politics", "события", "event", "происшествия", "incident"]
 
 def check_for_specific_ad_images(image_url, text=None):
     """
-    Проверяет, является ли изображение одним из конкретных рекламных изображений,
-    которые нужно блокировать (например, показанных пользователем)
+    Проверяет, является ли изображение одним из конкретных рекламных или новостных изображений,
+    которые нужно блокировать.
     
     Args:
         image_url (str): URL изображения
         text (str, optional): Текст, связанный с изображением
     
     Returns:
-        bool: True если изображение является рекламным, False если нет
+        bool: True если изображение является рекламным или новостным, False если нет
     """
     url = image_url.lower() if image_url else ""
     text_content = text.lower() if text else ""
@@ -295,15 +336,11 @@ def check_for_specific_ad_images(image_url, text=None):
         "новогод", "елка", "елочные", "фитнес", "спортзал", "тренировка"
     ]
     
-    # Этот блок специально для первого изображения с розовыми гантелями и елкой
     if any(marker in url for marker in fitness_markers) or any(marker in text_content for marker in fitness_markers):
-        # Дополнительная проверка на наличие новогодних элементов и гантелей
         if (("ганте" in url or "dumbbells" in url) and 
             ("новогод" in url or "елк" in url or "елоч" in url)):
             logger.info("Мем отфильтрован: содержит изображение гантелей с новогодним оформлением")
             return True
-            
-        # Проверка на фразу "тренируйся вместе с нами"
         if "тренируйся вместе с нами" in text_content or "тренируйся-вместе-с-нами" in url:
             logger.info("Мем отфильтрован: содержит текст 'тренируйся вместе с нами'")
             return True
@@ -315,15 +352,11 @@ def check_for_specific_ad_images(image_url, text=None):
         "розовый фон", "розовый-фон", "nail design"
     ]
     
-    # Этот блок специально для второго изображения с рекламой маникюра
     if any(marker in url for marker in nail_markers) or any(marker in text_content for marker in nail_markers):
-        # Проверка на характерные элементы визитки мастера маникюра
         if (("irina" in url or "ирина" in url) and 
             ("emelyanova" in url or "емельянова" in url)):
             logger.info("Мем отфильтрован: содержит рекламу мастера маникюра Ирины Емельяновой")
             return True
-            
-        # Проверка на розовый фон с золотыми элементами
         if "розовый" in url and ("маникюр" in url or "nail" in url):
             logger.info("Мем отфильтрован: содержит рекламу маникюра на розовом фоне")
             return True
@@ -334,24 +367,32 @@ def check_for_specific_ad_images(image_url, text=None):
         "чторру", "угорь", "рыба", "повар", "шеф"
     ]
     
-    # Этот блок специально для третьего изображения с доставкой еды
     if any(marker in url for marker in food_markers) or any(marker in text_content for marker in food_markers):
-        # Проверка на характерные элементы логотипа доставки суши
         if (("рыба" in url or "fish" in url) and 
             ("повар" in url or "шеф" in url or "chef" in url)):
             logger.info("Мем отфильтрован: содержит логотип доставки суши с рыбой-поваром")
             return True
-            
         if "доставка" in text_content and ("ролл" in text_content or "суши" in text_content):
             logger.info("Мем отфильтрован: содержит текст о доставке суши или роллов")
             return True
+    
+    # Проверка на новостной контент
+    news_markers = [
+        "новости", "news", "срочные новости", "новости дня",
+        "политика", "politics", "события", "event",
+        "происшествия", "incident", "репортаж", "журналист"
+    ]
+    
+    if any(marker in url for marker in news_markers) or any(marker in text_content for marker in news_markers):
+        logger.info("Мем отфильтрован: содержит новостной контент")
+        return True
     
     return False
 
 def is_suitable_meme(meme):
     """
-    Проверяет, подходит ли мем для показа пользователю
-    Отфильтровывает рекламные, спортивные мемы и другой нежелательный контент
+    Проверяет, подходит ли мем для показа пользователю.
+    Отфильтровывает рекламные, спортивные, новостные и другой нежелательный контент.
     
     Args:
         meme (dict): Словарь с информацией о меме (текст, изображение, теги и т.д.)
@@ -364,11 +405,9 @@ def is_suitable_meme(meme):
         image_url = meme.get("image_url", "").lower() if "image_url" in meme else ""
         text = meme.get("text", "").lower() if "text" in meme else ""
         
-        # Проверка на конкретные примеры рекламных изображений
-        if image_url:
-            # Первая специальная проверка на конкретные рекламные изображения
-            if check_for_specific_ad_images(image_url, text):
-                return False
+        # Проверка на конкретные примеры рекламных или новостных изображений
+        if image_url and check_for_specific_ad_images(image_url, text):
+            return False
         
         # Проверка на совпадение с запрещенными тегами
         if "tags" in meme and isinstance(meme["tags"], list):
@@ -377,15 +416,13 @@ def is_suitable_meme(meme):
                     logger.info(f"Мем отфильтрован по тегу: {tag}")
                     return False
         
-        # Стандартная проверка URL изображения
+        # Проверка URL изображения
         if image_url:
-            # Проверка на конкретные рекламные изображения, которые нужно блокировать
             for specific_image in SPECIFIC_BLOCKED_IMAGES:
                 if specific_image.lower() in image_url:
-                    logger.info(f"Мем отфильтрован по совпадению с конкретным рекламным изображением: {specific_image}")
+                    logger.info(f"Мем отфильтрован по совпадению с конкретным изображением: {specific_image}")
                     return False
             
-            # Общая проверка по заблокированным паттернам URL
             for pattern in BLOCKED_URL_PATTERNS:
                 if pattern.lower() in image_url:
                     logger.info(f"Мем отфильтрован по URL изображения (найдено '{pattern}')")
@@ -393,60 +430,67 @@ def is_suitable_meme(meme):
         
         # Проверка текста мема
         if text:
-            # Блокировка по ключевым фразам из конкретных примеров
             if "тренируйся вместе с нами" in text:
                 logger.info("Мем отфильтрован: содержит текст 'тренируйся вместе с нами'")
                 return False
-                
             if "nail artist" in text or "ирина емельянова" in text or "irina emelyanova" in text:
                 logger.info("Мем отфильтрован: содержит текст о nail artist")
                 return False
-                
             if "доставка роллов угорь чторру" in text:
                 logger.info("Мем отфильтрован: содержит текст о доставке еды")
                 return False
+            if any(news_term in text for news_term in ["новости", "news", "политика", "события", "происшествия"]):
+                logger.info("Мем отфильтрован: содержит новостной текст")
+                return False
             
-            # Проверка на точные совпадения с запрещенными паттернами
             for pattern in BLOCKED_TEXT_PATTERNS:
                 if pattern.lower() in text:
                     logger.info(f"Мем отфильтрован по тексту (найдено '{pattern}')")
                     return False
             
-            # Дополнительная проверка на рекламные фразы с использованием регулярных выражений
+            # Дополнительная проверка на рекламные и новостные фразы с регулярными выражениями
             ad_patterns = [
                 # Покупка
-                r'купи[т][ье]?\b',  # Купи, купите и т.д.
-                r'закажи[т][ье]?\b',  # Закажи, закажите и т.д.
-                r'\bцена\b',  # Цена
-                r'руб\.?',  # Рубли (любая форма)
-                r'\d+%\s+скидка',  # Проценты скидки
-                r'акци[яи]',  # Акция, акции
-                r'только\s+(сегодня|до\s+\d+)',  # "Только сегодня", "только до ..."
+                r'купи[т][ье]?\b',
+                r'закажи[т][ье]?\b',
+                r'\bцена\b',
+                r'руб\.?',
+                r'\d+%\s+скидка',
+                r'акци[яи]',
+                r'только\s+(сегодня|до\s+\d+)',
                 
                 # Спорт и фитнес
-                r'спортзал',  # Спортзал
-                r'тренировк[аи]',  # Тренировка, тренировки
-                r'трениру[ей]',  # Тренируй, тренируем и т.д.
-                r'фитнес',  # Фитнес
-                r'гантел[иь]',  # Гантели
-                r'зал[еа]?',  # Зал
+                r'спортзал',
+                r'тренировк[аи]',
+                r'трениру[ей]',
+                r'фитнес',
+                r'гантел[иь]',
+                r'зал[еа]?',
                 
                 # Маникюр и красота
-                r'маникюр',  # Маникюр
-                r'ногт[ие]',  # Ногти
-                r'дизайн\s+ногт',  # Дизайн ногтей
-                r'салон',  # Салон
-                r'красот[аы]',  # Красота
-                r'nail\s+art',  # Nail art
+                r'маникюр',
+                r'ногт[ие]',
+                r'дизайн\s+ногт',
+                r'салон',
+                r'красот[аы]',
+                r'nail\s+art',
                 
                 # Доставка еды
-                r'доставк[аи]',  # Доставка
-                r'ролл[ыов]',  # Роллы
-                r'суши',  # Суши
-                r'пицц[аы]',  # Пицца
-                r'ресторан',  # Ресторан
-                r'угорь',  # Угорь
-                r'меню'  # Меню
+                r'доставк[аи]',
+                r'ролл[ыов]',
+                r'суши',
+                r'пицц[аы]',
+                r'ресторан',
+                r'угорь',
+                r'меню',
+                
+                # Новости и политика
+                r'новост[иь]',
+                r'политик[аи]',
+                r'событи[яй]',
+                r'происшестви[яе]',
+                r'репортаж',
+                r'журналист'
             ]
             
             for pattern in ad_patterns:
@@ -457,16 +501,12 @@ def is_suitable_meme(meme):
         # Проверка метаданных изображения (если они есть)
         if "metadata" in meme and isinstance(meme["metadata"], dict):
             metadata = meme["metadata"]
-            
-            # Проверка заголовка
             if "title" in metadata and metadata["title"]:
                 title = metadata["title"].lower()
                 for pattern in BLOCKED_TEXT_PATTERNS:
                     if pattern.lower() in title:
                         logger.info(f"Мем отфильтрован по заголовку метаданных (найдено '{pattern}')")
                         return False
-            
-            # Проверка описания
             if "description" in metadata and metadata["description"]:
                 description = metadata["description"].lower()
                 for pattern in BLOCKED_TEXT_PATTERNS:
@@ -474,8 +514,11 @@ def is_suitable_meme(meme):
                         logger.info(f"Мем отфильтрован по описанию метаданных (найдено '{pattern}')")
                         return False
         
-        # Если прошел все проверки, значит мем подходит
         return True
+    
+    except Exception as e:
+        logger.error(f"Ошибка при фильтрации мема: {e}")
+        return False
     
     except Exception as e:
         logger.error(f"Ошибка при фильтрации мема: {e}")

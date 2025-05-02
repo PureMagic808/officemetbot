@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Улучшенный файл для запуска Telegram-бота на Railway с исправлениями проблем загрузки мемов.
-Обеспечивает обновление мемов в реальном времени с сохранением фильтрации рекламы.
+Улучшенный файл для запуска Telegram-бота на Railway с исправлениями конфликтов Telegram API
+и фильтрацией новостных мемов. Обеспечивает стабильную работу и загрузку офисных мемов.
 """
 import logging
 import os
@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # Путь к файлу для сохранения мемов
 MEMES_CACHE_FILE = "cached_filtered_memes.json"
 REJECTED_CACHE_FILE = "rejected_memes.json"
+LOCK_FILE = ".telegram_bot_railway_lock"
 
 # Словарь для хранения состояния пользователей
 user_states = {}
@@ -58,12 +59,14 @@ rejected_memes = {}
 
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
-MIN_MEMES_COUNT = 10    # Минимальное количество мемов (уменьшено для быстрого перехода к MEMES)
+MIN_MEMES_COUNT = 10    # Минимальное количество мемов
 MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
+CONFLICT_RETRIES = 3    # Количество попыток при конфликте Telegram API
+CONFLICT_RETRY_DELAY = 5  # Задержка между попытками (сек)
 
-# Публичные группы VK для мемов, временно оставлена только одна группа
+# Публичные группы VK для мемов
 VK_GROUP_IDS = [
-    29534144,   # office_plankton (предположительно доступна)
+    29534144,   # office_plankton (проверить доступность)
 ]
 
 # Флаг для управления процессом обновления
@@ -89,6 +92,7 @@ def signal_handler(sig, frame):
     global update_thread_running
     update_thread_running = False
     save_memes_to_cache()
+    cleanup_lock()
     sys.exit(0)
 
 def save_memes_to_cache():
@@ -105,21 +109,32 @@ def save_memes_to_cache():
         logger.error(f"Ошибка при сохранении мемов в кэш: {e}")
 
 def load_memes_from_cache():
-    """Загружает мемы из файла кэша, если он существует"""
+    """Загружает мемы из файла кэша, если он существует, и фильтрует их"""
     global memes_collection, rejected_memes
     try:
         if os.path.exists(MEMES_CACHE_FILE):
             with open(MEMES_CACHE_FILE, 'r', encoding='utf-8') as f:
                 loaded_memes = json.load(f)
                 if loaded_memes and isinstance(loaded_memes, dict):
-                    memes_collection = loaded_memes
-                    logger.info(f"Загружено {len(memes_collection)} мемов из кэша")
+                    filtered_memes = {}
+                    for meme_id, meme in loaded_memes.items():
+                        if is_suitable_meme(meme):
+                            filtered_memes[meme_id] = meme
+                        else:
+                            rejected_memes[meme_id] = meme
+                            logger.info(f"Мем {meme_id} из кэша отклонён как неподходящий")
+                    memes_collection = filtered_memes
+                    logger.info(f"Загружено {len(memes_collection)} мемов из кэша после фильтрации")
+                    # Логируем содержимое для отладки
+                    for meme_id in list(memes_collection.keys())[:5]:
+                        meme = memes_collection[meme_id]
+                        logger.info(f"Мем из кэша: ID={meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
         
         if os.path.exists(REJECTED_CACHE_FILE):
             with open(REJECTED_CACHE_FILE, 'r', encoding='utf-8') as f:
                 loaded_rejected = json.load(f)
                 if loaded_rejected and isinstance(loaded_rejected, dict):
-                    rejected_memes = loaded_rejected
+                    rejected_memes.update(loaded_rejected)
                     logger.info(f"Загружено {len(rejected_memes)} отклоненных мемов")
         
         return len(memes_collection) > 0
@@ -166,7 +181,7 @@ def init_default_memes():
                 if validate_image(meme["image_url"]) and is_suitable_meme(meme):
                     memes_collection[meme_id] = meme
                     count_added += 1
-                    logger.info(f"Добавлен мем {meme_id}")
+                    logger.info(f"Добавлен мем {meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
                 else:
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
@@ -182,13 +197,12 @@ def init_default_memes():
         for meme_id, meme in MEMES.items():
             if meme_id in memes_collection or meme_id in rejected_memes:
                 continue
-            # Добавляем timestamp для совместимости
             meme = meme.copy()
             meme['timestamp'] = datetime.now().isoformat()
             if validate_image(meme["image_url"]) and is_suitable_meme(meme):
                 memes_collection[meme_id] = meme
                 count_added += 1
-                logger.info(f"Добавлен статический мем {meme_id}")
+                logger.info(f"Добавлен статический мем {meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
             else:
                 rejected_memes[meme_id] = meme
                 count_rejected += 1
@@ -257,7 +271,7 @@ def fetch_and_add_new_memes(group_id, count=10):
             if image_valid and meme_suitable:
                 memes_collection[meme_id] = meme
                 new_memes_count += 1
-                logger.info(f"Добавлен новый мем {meme_id}")
+                logger.info(f"Добавлен новый мем {meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
             else:
                 rejected_memes[meme_id] = meme
                 rejected_count += 1
@@ -292,9 +306,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=(
-            "👋 Привет! Я бот для просмотра мемов без рекламы.\n\n"
-            "Используем передовую технологию фильтрации рекламного контента. "
-            "Все мемы тщательно проверяются системой фильтрации.\n\n"
+            "👋 Привет! Я бот для просмотра офисных мемов без рекламы и новостей.\n\n"
+            "Все мемы тщательно фильтруются для показа только офисного юмора.\n\n"
             "Используйте /start для начала, 👍/👎 для оценки мема, /next для пропуска."
         )
     )
@@ -458,7 +471,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "/next - Пропустить текущий мем и показать следующий\n"
             "/help - Показать эту справку\n"
             "/stats - Показать вашу статистику\n"
-            "/report - Сообщить о рекламном меме\n"
+            "/report - Сообщить о неподходящем меме\n"
             "/recommend - Получить персонализированные рекомендации"
         )
     )
@@ -513,7 +526,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 async def report_ad_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /report для отметки мема как рекламного."""
+    """Обработчик команды /report для отметки мема как неподходящего."""
     user_id = update.effective_user.id
     
     if user_id not in user_states or "current_meme" not in user_states[user_id]:
@@ -530,7 +543,7 @@ async def report_ad_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         save_memes_to_cache()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Спасибо! Мы отметили этот мем как рекламный и больше не будем его показывать."
+            text="Спасибо! Мы отметили этот мем как неподходящий и больше не будем его показывать."
         )
         await send_random_meme(update, context)
     else:
@@ -622,6 +635,7 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 text=text,
                 reply_markup=reply_markup
             )
+            logger.info(f"Отправлен текстовый рекомендованный мем")
         
         user_states[user_id]["current_meme"] = meme_id
         user_states[user_id]["viewed_memes"].append(meme_id)
@@ -637,6 +651,56 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             text="Произошла ошибка при формировании рекомендаций. Пожалуйста, попробуйте позже."
         )
 
+def check_and_create_lock():
+    """Проверяет и создаёт lock-файл для предотвращения множественных запусков"""
+    if os.path.exists(LOCK_FILE):
+        try:
+            file_time = os.path.getmtime(LOCK_FILE)
+            current_time = time.time()
+            if current_time - file_time < 120:
+                try:
+                    with open(LOCK_FILE, 'r') as f:
+                        pid_str = f.read().strip()
+                        if pid_str:
+                            pid = int(pid_str)
+                            try:
+                                os.kill(pid, 0)
+                                logger.warning(f"Бот уже запущен с PID {pid}. Останавливаем текущий запуск.")
+                                return False
+                            except OSError:
+                                logger.warning(f"Найден lock от несуществующего процесса {pid}. Удаляем.")
+                                os.remove(LOCK_FILE)
+                except Exception as e:
+                    logger.error(f"Ошибка при проверке PID в lock-файле: {e}")
+                    os.remove(LOCK_FILE)
+            else:
+                logger.warning(f"Найден устаревший lock-файл (возраст: {current_time - file_time:.1f}с). Удаляем.")
+                os.remove(LOCK_FILE)
+        except Exception as e:
+            logger.error(f"Ошибка при проверке lock-файла: {e}")
+            try:
+                os.remove(LOCK_FILE)
+            except:
+                pass
+    
+    try:
+        with open(LOCK_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+        logger.info(f"Создан lock-файл {LOCK_FILE} с PID {os.getpid()}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при создании lock-файла: {e}")
+        return False
+
+def cleanup_lock():
+    """Удаляет lock-файл при завершении работы"""
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+            logger.info(f"Lock-файл {LOCK_FILE} удалён")
+    except Exception as e:
+        logger.error(f"Ошибка при удалении lock-файла: {e}")
+
 def main():
     """Основная функция для запуска бота"""
     signal.signal(signal.SIGINT, signal_handler)
@@ -650,9 +714,22 @@ def main():
     except Exception as e:
         logger.error(f"Ошибка при загрузке аналитических данных: {e}")
     
+    # Очистка кэша, если он содержит неподходящие мемы
+    if os.path.exists(MEMES_CACHE_FILE):
+        try:
+            with open(MEMES_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cached_memes = json.load(f)
+                if any("новости" in meme.get("text", "").lower() or "news" in meme.get("tags", []) 
+                       for meme in cached_memes.values()):
+                    logger.warning("Обнаружены новостные мемы в кэше, очищаем кэш")
+                    os.remove(MEMES_CACHE_FILE)
+        except Exception as e:
+            logger.error(f"Ошибка при проверке кэша: {e}")
+            os.remove(MEMES_CACHE_FILE)
+    
     cache_loaded = load_memes_from_cache()
     if not cache_loaded or not memes_collection:
-        logger.info("Кэш мемов не загружен, инициализируем")
+        logger.info("Кэш мемов не загружен или пуст, инициализируем")
         init_default_memes()
     
     logger.info(f"Доступно {len(memes_collection)} мемов после фильтрации")
@@ -677,56 +754,6 @@ def main():
     application.add_handler(CommandHandler("recommend", recommend_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    LOCK_FILE = ".telegram_bot_railway_lock"
-    
-    def check_and_create_lock():
-        if os.path.exists(LOCK_FILE):
-            try:
-                file_time = os.path.getmtime(LOCK_FILE)
-                current_time = time.time()
-                if current_time - file_time < 120:
-                    try:
-                        with open(LOCK_FILE, 'r') as f:
-                            pid_str = f.read().strip()
-                            if pid_str:
-                                pid = int(pid_str)
-                                try:
-                                    os.kill(pid, 0)
-                                    logger.warning(f"Бот уже запущен с PID {pid}. Останавливаем текущий запуск.")
-                                    return False
-                                except OSError:
-                                    logger.warning(f"Найден lock от несуществующего процесса {pid}. Удаляем.")
-                                    os.remove(LOCK_FILE)
-                    except Exception as e:
-                        logger.error(f"Ошибка при проверке PID в lock-файле: {e}")
-                        os.remove(LOCK_FILE)
-                else:
-                    logger.warning(f"Найден устаревший lock-файл (возраст: {current_time - file_time:.1f}с). Удаляем.")
-                    os.remove(LOCK_FILE)
-            except Exception as e:
-                logger.error(f"Ошибка при проверке lock-файла: {e}")
-                try:
-                    os.remove(LOCK_FILE)
-                except:
-                    pass
-        
-        try:
-            with open(LOCK_FILE, 'w') as f:
-                f.write(str(os.getpid()))
-            logger.info(f"Создан lock-файл {LOCK_FILE} с PID {os.getpid()}")
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка при создании lock-файла: {e}")
-            return False
-    
-    def cleanup_lock():
-        try:
-            if os.path.exists(LOCK_FILE):
-                os.remove(LOCK_FILE)
-                logger.info(f"Lock-файл {LOCK_FILE} удален")
-        except Exception as e:
-            logger.error(f"Ошибка при удалении lock-файла: {e}")
-    
     if not check_and_create_lock():
         logger.warning("Не удалось создать lock-файл или бот уже запущен. Выход.")
         sys.exit(0)
@@ -750,25 +777,33 @@ def main():
     signal.signal(signal.SIGTERM, cleanup_and_forward)
     signal.signal(signal.SIGINT, cleanup_and_forward)
     
-    try:
-        logger.info("Запуск бота в режиме polling...")
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            close_loop=False,
-            connect_timeout=30,
-            read_timeout=30
-        )
-    except telegram.error.Conflict as conflict_error:
-        logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}. Другой экземпляр бота уже запущен.")
-        cleanup_lock()
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
-        cleanup_lock()
-        sys.exit(1)
-    finally:
-        cleanup_lock()
+    # Запуск бота с повторными попытками при конфликтах
+    for attempt in range(CONFLICT_RETRIES):
+        try:
+            logger.info(f"Запуск бота в режиме polling (попытка {attempt + 1}/{CONFLICT_RETRIES})...")
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                close_loop=False,
+                connect_timeout=30,
+                read_timeout=30
+            )
+            break  # Успешный запуск, выходим из цикла
+        except telegram.error.Conflict as conflict_error:
+            logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}")
+            if attempt < CONFLICT_RETRIES - 1:
+                logger.info(f"Ожидаем {CONFLICT_RETRY_DELAY} секунд перед повторной попыткой...")
+                time.sleep(CONFLICT_RETRY_DELAY)
+            else:
+                logger.error("Достигнуто максимальное количество попыток. Завершаем работу.")
+                cleanup_lock()
+                sys.exit(1)
+        except Exception as e:
+            logger.error(f"Ошибка при запуске бота: {e}")
+            cleanup_lock()
+            sys.exit(1)
+        finally:
+            cleanup_lock()
 
 if __name__ == "__main__":
     main()

@@ -13,46 +13,37 @@ logger = logging.getLogger(__name__)
 # Список тегов, которые должны отсутствовать в меме, чтобы его показывать
 BLOCKED_CONTENT_TAGS = [
     # Спорт и фитнес
-    "спорт", "реклама", "телефон", "объявление", "фитнес", "тренировка", 
-    "тренер", "тренируйся", "gym", "workout", "sale", "спортзал", "фитоняшка",
+    "реклама", "телефон", "объявление", "sale", "спортзал", "фитоняшка",
     
     # Маникюр и бьюти
-    "nail", "маникюр", "ногти", "beauty", "салон", "nail art", "irina",
+    "nail", "маникюр", "ногти", "nail art",
     
     # Доставка еды
-    "доставка", "роллы", "суши", "пицца", "chef", "ресторан", "меню",
+    "доставка", "роллы", "суши", "пицца", "ресторан",
     
     # Праздники и акции
     "новый год", "подарки", "скидки", "акция", "sale",
     
     # Новости и политика
     "новости", "политика", "события", "происшествия", "news", "politics",
-    "event", "incident", "журналист", "репортаж", "изобрели", "появятся",
-    "возвращаются", "приобретает", "собирается",
-    
-    # Животные и сериалы (новые категории)
-    "животные", "собака", "кошка", "пёсель", "черепашка", "музей", "сериал",
-    "домохозяйки", "скорая", "медицина"
+    "event", "incident", "журналист", "репортаж",
 ]
 
 # Список строк для проверки URL изображений на нежелательный контент
 BLOCKED_URL_PATTERNS = [
-    "новости", "news", "politics", "event", "incident", "тренировк", "fitness",
-    "gym", "nail", "доставка", "sale", "акци", "скидк", "animal", "pet", "dog", "cat"
+    "новости", "news", "politics", "event", "incident", "sale", "акци", "скидк"
 ]
 
 # Список текстов, которые указывают на рекламный или новостной контент
 BLOCKED_TEXT_PATTERNS = [
     "последние новости", "срочные новости", "новости дня", "политические события",
     "происшествие", "события в мире", "новостной канал", "репортаж", "журналист",
-    "изобрели", "появятся", "возвращаются", "приобретает", "собирается", "доставка",
-    "купить", "акция", "скидка", "цена", "закажи", "пёсель", "черепашка", "сериал",
-    "домохозяйки", "скорая", "медицина"
+    "доставка", "купить", "акция", "скидка", "цена", "закажи"
 ]
 
 # Специальные изображения, которые нужно отфильтровать
 SPECIFIC_BLOCKED_IMAGES = [
-    "news", "новости", "breaking-news", "sponsor", "реклама", "promo", "animal", "pet"
+    "news", "новости", "breaking-news", "sponsor", "реклама", "promo"
 ]
 
 def check_for_specific_ad_images(image_url, text=None):
@@ -62,7 +53,7 @@ def check_for_specific_ad_images(image_url, text=None):
     url = image_url.lower() if image_url else ""
     text_content = text.lower() if text else ""
     
-    news_markers = ["новости", "news", "изобрели", "появятся", "возвращаются", "animal", "pet", "dog", "cat"]
+    news_markers = ["новости", "news", "breaking-news"]
     if any(marker in url for marker in news_markers) or any(marker in text_content for marker in news_markers):
         logger.info(f"Мем отфильтрован: содержит новостной контент (URL: {url}, Text: {text_content[:50]})")
         return True
@@ -77,9 +68,15 @@ def is_suitable_meme(meme):
         image_url = meme.get("image_url", "").lower() if "image_url" in meme else ""
         text = meme.get("text", "").lower() if "text" in meme else ""
         
-        # Проверяем, что мем связан с офисной тематикой
-        office_keywords = ["офис", "работа", "коллеги", "работяги", "будни", "корпоратив"]
-        is_office_related = any(keyword in text for keyword in office_keywords) or "office" in meme.get("tags", [])
+        # Проверяем, что мем связан с офисной тематикой или юморным контентом
+        office_keywords = [
+            "офис", "работа", "коллеги", "работяги", "будни", "корпоратив",
+            "начальник", "собеседование", "зарплата", "переговорка", "планёрка",
+            "документы", "отчёты", "соцпакет", "перерыв", "кофе", "принтер",
+            "email", "собрание", "deadline", "отпуск", "тайм-менеджмент",
+            "монтаж", "монтировщик", "шутка", "юмор", "смешно", "с 1 мая"
+        ]
+        is_office_related = any(keyword in text for keyword in office_keywords) or not any(pattern in text for pattern in BLOCKED_TEXT_PATTERNS)
         if not is_office_related:
             logger.info(f"Мем отфильтрован: не связан с офисной тематикой (Text: {text[:50]})")
             return False
@@ -107,9 +104,7 @@ def is_suitable_meme(meme):
             
             ad_patterns = [
                 r'новост[иь]', r'политик[аи]', r'событи[яй]', r'происшестви[яе]',
-                r'изобрели\b', r'появятся\b', r'возвращаются\b', r'приобретает\b',
-                r'собирается\b', r'руб\.?', r'долл\.?', r'€', r'куп[иь]\b',
-                r'собак[аи]', r'пёсель\b', r'кошк[аи]', r'черепашк[аи]', r'сериал\b'
+                r'доставк[аи]', r'куп[иь]\b', r'акци[яи]', r'скидк[аи]'
             ]
             for pattern in ad_patterns:
                 if re.search(pattern, text, re.IGNORECASE):

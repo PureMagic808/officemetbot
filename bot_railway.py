@@ -61,8 +61,8 @@ rejected_memes = {}
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
 MIN_MEMES_COUNT = 10    # Минимальное количество мемов
 MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
-CONFLICT_RETRIES = 3    # Количество попыток при конфликте Telegram API
-CONFLICT_RETRY_DELAY = 5  # Задержка между попытками (сек)
+CONFLICT_RETRIES = 5    # Увеличено количество попыток при конфликте
+CONFLICT_RETRY_DELAY = 10  # Увеличена задержка между попытками (сек)
 
 # Флаг для управления процессом обновления
 update_thread_running = False
@@ -83,7 +83,7 @@ except vk_api.AuthError as e:
 
 def signal_handler(sig, frame):
     """Обработчик сигнала для корректного завершения работы бота"""
-    logger.info("Получен сигнал завершения. Завершаем работу бота...")
+    logger.info(f"Получен сигнал завершения ({sig}). Завершаем работу бота...")
     global update_thread_running
     update_thread_running = False
     save_memes_to_cache()
@@ -161,7 +161,7 @@ def init_default_memes():
     count_added = 0
     count_rejected = 0
     
-    for group_id in VK_GROUP_IDS:  # Используем группы из vk_utils.py
+    for group_id in VK_GROUP_IDS:
         try:
             memes = fetch_vk_memes(group_id, count=20, vk_session=vk_session)
             for meme in memes:
@@ -175,7 +175,7 @@ def init_default_memes():
                 else:
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
-                    logger.info(f"Отклонен мем {meme_id} как неподходящий или с недоступным изображением")
+                    logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not validate_image(meme['image_url']) else 'как неподходящий'}")
             time.sleep(random.uniform(0.5, 1))
         except Exception as e:
             logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
@@ -627,11 +627,12 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 def check_and_create_lock():
     """Проверяет и создаёт lock-файл для предотвращения множественных запусков"""
+    lock_timeout = 120  # Таймаут в секундах для устаревшего lock
     if os.path.exists(LOCK_FILE):
         try:
             file_time = os.path.getmtime(LOCK_FILE)
             current_time = time.time()
-            if current_time - file_time < 120:
+            if current_time - file_time < lock_timeout:
                 try:
                     with open(LOCK_FILE, 'r') as f:
                         pid_str = f.read().strip()
@@ -639,7 +640,7 @@ def check_and_create_lock():
                             pid = int(pid_str)
                             try:
                                 os.kill(pid, 0)
-                                logger.warning(f"Бот уже запущен с PID {pid}. Останавливаем текущий запуск.")
+                                logger.warning(f"Бот уже запущен с PID {pid}. Ожидаем завершения...")
                                 return False
                             except OSError:
                                 logger.warning(f"Найден lock от несуществующего процесса {pid}. Удаляем.")
@@ -751,10 +752,11 @@ def main():
             )
             break
         except telegram.error.Conflict as conflict_error:
-            logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}")
+            logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}. Пробуем перезапустить...")
             if attempt < CONFLICT_RETRIES - 1:
                 logger.info(f"Ожидаем {CONFLICT_RETRY_DELAY} секунд перед повторной попыткой...")
                 time.sleep(CONFLICT_RETRY_DELAY)
+                cleanup_lock()  # Очистка lock перед следующей попыткой
             else:
                 logger.error("Достигнуто максимальное количество попыток. Завершаем работу.")
                 cleanup_lock()

@@ -163,6 +163,7 @@ def init_default_memes():
     
     for group_id in VK_GROUP_IDS:
         try:
+            logger.info(f"Попытка загрузки мемов из группы {group_id}")
             memes = fetch_vk_memes(group_id, count=20, vk_session=vk_session)
             for meme in memes:
                 meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
@@ -296,8 +297,8 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await start(update, context)
         return
     
-    if not memes_collection:
-        logger.warning("Мемы отсутствуют в коллекции. Инициализация...")
+    if not memes_collection or len(memes_collection) < 2:
+        logger.warning("Мемы отсутствуют или недостаточно в коллекции. Повторная инициализация...")
         if not init_default_memes():
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -309,10 +310,14 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     viewed_memes = user_states[user_id].get("viewed_memes", [])
     available_memes = [meme_id for meme_id in memes_collection if meme_id not in viewed_memes]
     
-    if not available_memes or len(available_memes) < 5:
-        logger.info(f"Пользователь {user_id} просмотрел все мемы, сбрасываем историю")
+    if not available_memes or len(available_memes) < 2:
+        logger.info(f"Пользователь {user_id} просмотрел все мемы или пулов недостаточно, сбрасываем историю")
         user_states[user_id]["viewed_memes"] = []
         available_memes = list(memes_collection.keys())
+        if len(available_memes) < 2:
+            logger.warning("Пул мемов меньше 2. Повторная загрузка...")
+            init_default_memes()
+            available_memes = list(memes_collection.keys())
     
     ratings = user_states[user_id].get("ratings", {})
     if len(ratings) >= 5:

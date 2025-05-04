@@ -59,7 +59,7 @@ rejected_memes = {}
 
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
-MIN_MEMES_COUNT = 10    # Минимальное количество мемов
+MIN_MEMES_COUNT = 5     # Уменьшен минимальный порог для тестирования
 MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
 CONFLICT_RETRIES = 5    # Увеличено количество попыток при конфликте
 CONFLICT_RETRY_DELAY = 10  # Увеличена задержка между попытками (сек)
@@ -165,6 +165,9 @@ def init_default_memes():
         try:
             logger.info(f"Попытка загрузки мемов из группы {group_id}")
             memes = fetch_vk_memes(group_id, count=20, vk_session=vk_session)
+            if not memes:
+                logger.warning(f"Нет мемов в группе {group_id}")
+                continue
             for meme in memes:
                 meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
                 if meme_id in memes_collection or meme_id in rejected_memes:
@@ -182,14 +185,26 @@ def init_default_memes():
             logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
             continue
     
+    if count_added < MIN_MEMES_COUNT:
+        logger.warning(f"Добавлено только {count_added} мемов, меньше {MIN_MEMES_COUNT}. Принудительное добавление...")
+        for meme in memes[:MIN_MEMES_COUNT - count_added]:
+            meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
+            if meme_id not in memes_collection and meme_id not in rejected_memes and validate_image(meme["image_url"]):
+                memes_collection[meme_id] = meme
+                count_added += 1
+                logger.info(f"Принудительно добавлен мем {meme_id}, Text={meme.get('text', '')[:50]}")
+    
     logger.info(f"Инициализировано {count_added} подходящих мемов и {count_rejected} отклоненных мемов")
     return count_added > 0
 
 def try_fetch_memes_from_vk():
     """Проверяет возможность получения мемов из VK"""
     try:
+        logger.info(f"Тестовый вызов VK API для группы {VK_GROUP_IDS[0]}")
         test_memes = fetch_vk_memes(VK_GROUP_IDS[0], count=1, vk_session=vk_session)
-        return len(test_memes) > 0
+        result = len(test_memes) > 0
+        logger.info(f"Тест VK API успешен: {result}")
+        return result
     except Exception as e:
         logger.error(f"Ошибка при тестовом вызове VK API: {e}")
         return False
@@ -212,11 +227,13 @@ def update_memes():
             if len(memes_collection) < MIN_MEMES_COUNT:
                 logger.info(f"Количество мемов ({len(memes_collection)}) меньше минимального {MIN_MEMES_COUNT}. Запускаем обновление...")
                 for group_id in VK_GROUP_IDS:
+                    logger.info(f"Обновление мемов для группы {group_id}")
                     fetch_and_add_new_memes(group_id, MAX_MEMES_TO_FETCH // len(VK_GROUP_IDS))
                     time.sleep(random.uniform(0.5, 1))
             
             logger.info("Выполняется регулярное обновление мемов...")
             for group_id in VK_GROUP_IDS:
+                logger.info(f"Регулярное обновление для группы {group_id}")
                 fetch_and_add_new_memes(group_id, 5)
                 time.sleep(random.uniform(0.5, 1))
             

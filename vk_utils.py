@@ -19,6 +19,7 @@ def fetch_vk_memes(group_id, count=20, vk_session=None):
     
     vk = vk_session.get_api()
     memes = []
+    seen_memes = set()  # Для исключения дубликатов
     attempts = 0
     max_attempts = 10
     
@@ -34,10 +35,16 @@ def fetch_vk_memes(group_id, count=20, vk_session=None):
                 if 'attachments' in post:
                     for attachment in post['attachments']:
                         if attachment['type'] == 'photo':
+                            image_url = max(attachment['photo']['sizes'], key=lambda x: x['width'])['url']
+                            text = post.get('text', '')[:200]  # Ограничиваем текст
+                            meme_key = f"{text}|{image_url}"  # Ключ для проверки дубликатов
+                            if meme_key in seen_memes:
+                                continue  # Пропускаем дубликат
+                            seen_memes.add(meme_key)
                             meme = {
-                                'text': post.get('text', '')[:200],  # Ограничиваем текст
-                                'image_url': max(attachment['photo']['sizes'], key=lambda x: x['width'])['url'],
-                                'tags': [tag.strip() for tag in post.get('text', '').split() if tag.startswith('#')] or ['office'],
+                                'text': text,
+                                'image_url': image_url,
+                                'tags': [tag.strip() for tag in post.get('text', '').split() if tag.startswith('#')],
                                 'source': f'vk_group_{group_id}'
                             }
                             memes.append(meme)
@@ -59,13 +66,13 @@ def fetch_vk_memes(group_id, count=20, vk_session=None):
     
     return memes[:count]
 
-# Список групп с офисной тематикой
+# Список групп с офисной тематикой и новыми группами
 VK_GROUP_IDS = [
     29534144,   # Офисный планктон
-    41269364,   # Офисный юмор
-    67275147,   # Рабочие будни
-    98765432,   # Офисный зоопарк
-    12345678    # Кубикл лайф
+    60102821,   # Офисный юмор и мемы
+    162150316,  # 4chnn (интернет-культура и мемы)
+    45045130,   # public45045130 (возможно, мемы про животных)
+    211664614   # zoopack (мемы про животных)
 ]
 
 def fetch_memes_from_all_groups(count=20):

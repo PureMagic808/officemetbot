@@ -59,10 +59,10 @@ rejected_memes = {}
 
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
-MIN_MEMES_COUNT = 5     # Уменьшен минимальный порог для тестирования
+MIN_MEMES_COUNT = 5     # Минимальное количество мемов
 MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
-CONFLICT_RETRIES = 5    # Увеличено количество попыток при конфликте
-CONFLICT_RETRY_DELAY = 10  # Увеличена задержка между попытками (сек)
+CONFLICT_RETRIES = 3    # Уменьшено количество попыток при конфликте
+CONFLICT_RETRY_DELAY = 15  # Увеличена задержка между попытками (сек)
 
 # Флаг для управления процессом обновления
 update_thread_running = False
@@ -649,7 +649,7 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 def check_and_create_lock():
     """Проверяет и создаёт lock-файл для предотвращения множественных запусков"""
-    lock_timeout = 120  # Таймаут в секундах для устаревшего lock
+    lock_timeout = 300  # Увеличен таймаут до 5 минут
     if os.path.exists(LOCK_FILE):
         try:
             file_time = os.path.getmtime(LOCK_FILE)
@@ -662,8 +662,8 @@ def check_and_create_lock():
                             pid = int(pid_str)
                             try:
                                 os.kill(pid, 0)
-                                logger.warning(f"Бот уже запущен с PID {pid}. Ожидаем завершения...")
-                                return False
+                                logger.error(f"Бот уже запущен с PID {pid}. Завершаем текущий процесс.")
+                                sys.exit(1)  # Завершаем немедленно
                             except OSError:
                                 logger.warning(f"Найден lock от несуществующего процесса {pid}. Удаляем.")
                                 os.remove(LOCK_FILE)
@@ -682,8 +682,9 @@ def check_and_create_lock():
     
     try:
         with open(LOCK_FILE, 'w') as f:
-            f.write(str(os.getpid()))
-        logger.info(f"Создан lock-файл {LOCK_FILE} с PID {os.getpid()}")
+            pid = os.getpid()
+            f.write(str(pid))
+        logger.info(f"Создан lock-файл {LOCK_FILE} с PID {pid}")
         return True
     except Exception as e:
         logger.error(f"Ошибка при создании lock-файла: {e}")
@@ -739,8 +740,8 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     if not check_and_create_lock():
-        logger.warning("Не удалось создать lock-файл или бот уже запущен. Выход.")
-        sys.exit(0)
+        logger.error("Не удалось создать lock-файл или бот уже запущен. Завершаем работу.")
+        sys.exit(1)
     
     original_sigterm_handler = signal.getsignal(signal.SIGTERM)
     original_sigint_handler = signal.getsignal(signal.SIGINT)
@@ -774,11 +775,15 @@ def main():
             )
             break
         except telegram.error.Conflict as conflict_error:
-            logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}. Пробуем перезапустить...")
+            logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}. Проверяем запущенные экземпляры...")
             if attempt < CONFLICT_RETRIES - 1:
                 logger.info(f"Ожидаем {CONFLICT_RETRY_DELAY} секунд перед повторной попыткой...")
                 time.sleep(CONFLICT_RETRY_DELAY)
-                cleanup_lock()  # Очистка lock перед следующей попыткой
+                # Проверяем lock-файл перед повторной попыткой
+                if not check_and_create_lock():
+                    logger.error("Другой экземпляр бота всё ещё работает. Завершаем.")
+                    cleanup_lock()
+                    sys.exit(1)
             else:
                 logger.error("Достигнуто максимальное количество попыток. Завершаем работу.")
                 cleanup_lock()

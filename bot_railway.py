@@ -60,9 +60,9 @@ rejected_memes = {}
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
 MIN_MEMES_COUNT = 5     # Минимальное количество мемов
-MAX_MEMES_TO_FETCH = 20 # Максимальное количество мемов за одно обновление
-CONFLICT_RETRIES = 3    # Уменьшено количество попыток при конфликте
-CONFLICT_RETRY_DELAY = 15  # Увеличена задержка между попытками (сек)
+MAX_MEMES_TO_FETCH = 50 # Увеличен лимит для загрузки
+CONFLICT_RETRIES = 3    # Количество попыток при конфликте
+CONFLICT_RETRY_DELAY = 15  # Задержка между попытками (сек)
 
 # Флаг для управления процессом обновления
 update_thread_running = False
@@ -151,7 +151,7 @@ def validate_image(image_url):
             logger.error(f"Ошибка проверки изображения {image_url}: {e}")
             return False
     except Exception as e:
-        logger.error(f"Ошибка загрузки изображения {image_url}: {e}")
+        logger.error(f"Ошибка загрузки изображения {image_url): {e}")
         return False
 
 def init_default_memes():
@@ -164,7 +164,8 @@ def init_default_memes():
     for group_id in VK_GROUP_IDS:
         try:
             logger.info(f"Попытка загрузки мемов из группы {group_id}")
-            memes = fetch_vk_memes(group_id, count=20, vk_session=vk_session)
+            memes = fetch_vk_memes(group_id, count=MAX_MEMES_TO_FETCH, vk_session=vk_session)
+            logger.info(f"Всего доступно постов в группе {group_id}: {len(memes)}")
             if not memes:
                 logger.warning(f"Нет мемов в группе {group_id}")
                 continue
@@ -180,7 +181,7 @@ def init_default_memes():
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
                     logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not validate_image(meme['image_url']) else 'как неподходящий'}")
-            time.sleep(random.uniform(0.5, 1))
+            time.sleep(random.uniform(1, 2))  # Увеличена задержка для соблюдения лимитов API
         except Exception as e:
             logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
             continue
@@ -229,13 +230,13 @@ def update_memes():
                 for group_id in VK_GROUP_IDS:
                     logger.info(f"Обновление мемов для группы {group_id}")
                     fetch_and_add_new_memes(group_id, MAX_MEMES_TO_FETCH // len(VK_GROUP_IDS))
-                    time.sleep(random.uniform(0.5, 1))
+                    time.sleep(random.uniform(1, 2))
             
             logger.info("Выполняется регулярное обновление мемов...")
             for group_id in VK_GROUP_IDS:
                 logger.info(f"Регулярное обновление для группы {group_id}")
                 fetch_and_add_new_memes(group_id, 5)
-                time.sleep(random.uniform(0.5, 1))
+                time.sleep(random.uniform(1, 2))
             
             save_memes_to_cache()
             time.sleep(UPDATE_INTERVAL)
@@ -251,6 +252,7 @@ def fetch_and_add_new_memes(group_id, count=10):
     rejected_count = 0
     try:
         memes = fetch_vk_memes(group_id, count, vk_session=vk_session)
+        logger.info(f"Всего доступно постов в группе {group_id} для добавления: {len(memes)}")
         for meme in memes:
             meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
             if meme_id in memes_collection or meme_id in rejected_memes:
@@ -649,7 +651,7 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 def check_and_create_lock():
     """Проверяет и создаёт lock-файл для предотвращения множественных запусков"""
-    lock_timeout = 300  # Увеличен таймаут до 5 минут
+    lock_timeout = 300  # Таймаут 5 минут
     if os.path.exists(LOCK_FILE):
         try:
             file_time = os.path.getmtime(LOCK_FILE)
@@ -663,7 +665,7 @@ def check_and_create_lock():
                             try:
                                 os.kill(pid, 0)
                                 logger.error(f"Бот уже запущен с PID {pid}. Завершаем текущий процесс.")
-                                sys.exit(1)  # Завершаем немедленно
+                                sys.exit(1)
                             except OSError:
                                 logger.warning(f"Найден lock от несуществующего процесса {pid}. Удаляем.")
                                 os.remove(LOCK_FILE)

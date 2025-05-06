@@ -62,7 +62,7 @@ unique_meme_signatures = set()
 
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
-MIN_MEMES_COUNT = 1     # Минимальное количество мемов (уменьшено с 5 до 1)
+MIN_MEMES_COUNT = 1     # Минимальное количество мемов
 MAX_MEMES_TO_FETCH = 50 # Увеличен лимит для загрузки
 CONFLICT_RETRIES = 3    # Количество попыток при конфликте
 CONFLICT_RETRY_DELAY = 15  # Задержка между попытками (сек)
@@ -111,7 +111,7 @@ def load_memes_from_cache():
     global memes_collection, rejected_memes, unique_meme_signatures
     try:
         if os.path.exists(MEMES_CACHE_FILE):
-            with open(MEMES_CACHE_FILE, 'r', encoding='utf-8') as f:
+            with open(MEMES_CACHE_FILE, 'r', encodingTar='utf-8') as f:
                 loaded_memes = json.load(f)
                 if loaded_memes and isinstance(loaded_memes, dict):
                     filtered_memes = {}
@@ -126,7 +126,7 @@ def load_memes_from_cache():
                             unique_meme_signatures.add(signature)
                         else:
                             rejected_memes[meme_id] = meme
-                            logger.info(f"Мем {meme_id} из кэша отклонён как неподходящий")
+                            logger.info(f"Мем {meme_id} из кэша отклонён как неподходящий, Text={meme.get('text', '')[:50]}")
                     memes_collection = filtered_memes
                     logger.info(f"Загружено {len(memes_collection)} мемов из кэша после фильтрации")
         
@@ -202,7 +202,7 @@ def init_default_memes():
                 else:
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
-                    logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}")
+                    logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}, Text={meme.get('text', '')[:50]}")
             time.sleep(random.uniform(1, 2))  # Увеличена задержка для соблюдения лимитов API
         except Exception as e:
             logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
@@ -304,7 +304,7 @@ def fetch_and_add_new_memes(group_id, count=10):
             else:
                 rejected_memes[meme_id] = meme
                 rejected_count += 1
-                logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}")
+                logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}, Text={meme.get('text', '')[:50]}")
     except Exception as e:
         logger.error(f"Ошибка при получении мемов из группы {group_id}: {e}")
     

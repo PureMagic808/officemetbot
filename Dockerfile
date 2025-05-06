@@ -4,10 +4,13 @@ FROM python:3.9-slim
 # Установка рабочей директории
 WORKDIR /app
 
-# Установка системных зависимостей для Pillow
+# Установка системных зависимостей для Pillow и vk-api
 RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     zlib1g-dev \
+    build-essential \
+    gcc \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Копирование только необходимых файлов
@@ -23,7 +26,7 @@ RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir Pillow==10.4.0 --index-url https://pypi.org/simple
 RUN pip install --no-cache-dir python-telegram-bot==20.7 --index-url https://pypi.org/simple
 RUN pip install --no-cache-dir requests==2.32.3 --index-url https://pypi.org/simple
-RUN pip install --no-cache-dir vk-api==12.0.0 --index-url https://pypi.org/simple
+RUN pip install --no-cache-dir vk-api==11.9.9 --index-url https://pypi.org/simple
 
 # Команда запуска
 CMD ["python", "bot_railway.py"]

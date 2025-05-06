@@ -151,7 +151,7 @@ def validate_image(image_url):
             logger.error(f"Ошибка проверки изображения {image_url}: {e}")
             return False
     except Exception as e:
-        logger.error(f"Ошибка загрузки изображения {image_url): {e}")
+        logger.error(f"Ошибка загрузки изображения {image_url}: {e}")
         return False
 
 def init_default_memes():
@@ -411,7 +411,7 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             meme_analytics.record_meme_view(meme_id, user_id)
         except Exception as e:
-            logger.error(f"Ошибка при записи просмотра мema: {e}")
+            logger.error(f"Ошибка при записи просмотра мема: {e}")
         logger.info(f"Отправлен мем {meme_id} пользователю {user_id}")
     
     except Exception as e:

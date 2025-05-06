@@ -6,7 +6,7 @@ import random
 
 logger = logging.getLogger(__name__)
 
-# Обновлённый список групп VK (ID публичных групп с мемами)
+# Список групп VK (ID публичных групп с мемами)
 VK_GROUP_IDS = [
     29534144,  # Оставляем старую группу
     27532693,  # MDK
@@ -24,6 +24,7 @@ def fetch_vk_memes(group_id: int, count: int, vk_session: vk_api.VkApi) -> List[
         max_attempts = 5
         attempt = 0
 
+        logger.info(f"Начало загрузки мемов из группы {group_id}, count={count}")
         while len(memes) < count and attempt < max_attempts:
             response = vk.wall.get(
                 owner_id=-group_id,
@@ -33,7 +34,7 @@ def fetch_vk_memes(group_id: int, count: int, vk_session: vk_api.VkApi) -> List[
             )
             items = response.get("items", [])
             if not items:
-                logger.info(f"Больше постов не найдено в группе {group_id}")
+                logger.info(f"Больше постов не найдено в группе {group_id} на offset={offset}")
                 break
 
             for item in items:
@@ -54,7 +55,7 @@ def fetch_vk_memes(group_id: int, count: int, vk_session: vk_api.VkApi) -> List[
             offset += len(items)
             attempt += 1
             if attempt < max_attempts:
-                time.sleep(random.uniform(0.5, 1.5))  # Задержка для соблюдения лимитов API
+                time.sleep(random.uniform(1.0, 2.0))  # Увеличена задержка
 
         logger.info(f"Получено {len(memes)} мемов из группы {group_id}")
         return memes
@@ -65,6 +66,3 @@ def fetch_vk_memes(group_id: int, count: int, vk_session: vk_api.VkApi) -> List[
     except Exception as e:
         logger.error(f"Неожиданная ошибка при загрузке мемов из группы {group_id}: {e}")
         return []
-    memes = fetch_memes_from_all_groups(20)
-    for meme in memes:
-        logger.info(f"Мем: Text={meme['text'][:50]}, URL={meme['image_url']}")

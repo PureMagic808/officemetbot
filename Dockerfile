@@ -16,8 +16,14 @@ COPY bot_railway.py meme_data.py vk_utils.py recommendation_engine.py meme_analy
 # Отладка: проверим, что requirements.txt скопирован
 RUN ls -la && cat requirements.txt
 
-# Установка зависимостей
-RUN pip install --no-cache-dir -r requirements.txt --index-url https://pypi.org/simple
+# Обновляем pip до последней версии
+RUN pip install --no-cache-dir --upgrade pip
+
+# Установка зависимостей по одной для отладки
+RUN pip install --no-cache-dir Pillow==10.4.0 --index-url https://pypi.org/simple
+RUN pip install --no-cache-dir python-telegram-bot==20.7 --index-url https://pypi.org/simple
+RUN pip install --no-cache-dir requests==2.32.3 --index-url https://pypi.org/simple
+RUN pip install --no-cache-dir vk-api==12.0.0 --index-url https://pypi.org/simple
 
 # Команда запуска
 CMD ["python", "bot_railway.py"]

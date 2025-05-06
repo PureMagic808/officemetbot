@@ -57,6 +57,9 @@ memes_collection = {}
 # Словарь отклоненных мемов для анализа
 rejected_memes = {}
 
+# Множество для отслеживания уникальных мемов (по тексту и URL)
+unique_meme_signatures = set()
+
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
 MIN_MEMES_COUNT = 5     # Минимальное количество мемов
@@ -105,7 +108,7 @@ def save_memes_to_cache():
 
 def load_memes_from_cache():
     """Загружает мемы из файла кэша, если он существует, и фильтрует их"""
-    global memes_collection, rejected_memes
+    global memes_collection, rejected_memes, unique_meme_signatures
     try:
         if os.path.exists(MEMES_CACHE_FILE):
             with open(MEMES_CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -113,8 +116,14 @@ def load_memes_from_cache():
                 if loaded_memes and isinstance(loaded_memes, dict):
                     filtered_memes = {}
                     for meme_id, meme in loaded_memes.items():
+                        signature = f"{meme.get('text', '')}|{meme.get('image_url', '')}"
+                        if signature in unique_meme_signatures:
+                            rejected_memes[meme_id] = meme
+                            logger.info(f"Мем {meme_id} из кэша отклонён как дубликат")
+                            continue
                         if is_suitable_meme(meme):
                             filtered_memes[meme_id] = meme
+                            unique_meme_signatures.add(signature)
                         else:
                             rejected_memes[meme_id] = meme
                             logger.info(f"Мем {meme_id} из кэша отклонён как неподходящий")
@@ -156,7 +165,7 @@ def validate_image(image_url):
 
 def init_default_memes():
     """Инициализирует базовый набор мемов из VK API"""
-    global memes_collection, rejected_memes
+    global memes_collection, rejected_memes, unique_meme_signatures
     logger.info("Инициализация стандартного набора мемов из VK")
     count_added = 0
     count_rejected = 0
@@ -171,16 +180,29 @@ def init_default_memes():
                 continue
             for meme in memes:
                 meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
+                signature = f"{meme.get('text', '')}|{meme.get('image_url', '')}"
+                
+                # Проверка на дубликаты
+                if signature in unique_meme_signatures:
+                    rejected_memes[meme_id] = meme
+                    count_rejected += 1
+                    logger.info(f"Отклонен мем {meme_id} как дубликат")
+                    continue
+                
                 if meme_id in memes_collection or meme_id in rejected_memes:
                     continue
-                if validate_image(meme["image_url"]) and is_suitable_meme(meme):
+                
+                image_valid = validate_image(meme["image_url"])
+                meme_suitable = is_suitable_meme(meme)
+                if image_valid and meme_suitable:
                     memes_collection[meme_id] = meme
+                    unique_meme_signatures.add(signature)
                     count_added += 1
                     logger.info(f"Добавлен мем {meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
                 else:
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
-                    logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not validate_image(meme['image_url']) else 'как неподходящий'}")
+                    logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}")
             time.sleep(random.uniform(1, 2))  # Увеличена задержка для соблюдения лимитов API
         except Exception as e:
             logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
@@ -190,8 +212,12 @@ def init_default_memes():
         logger.warning(f"Добавлено только {count_added} мемов, меньше {MIN_MEMES_COUNT}. Принудительное добавление...")
         for meme in memes[:MIN_MEMES_COUNT - count_added]:
             meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
+            signature = f"{meme.get('text', '')}|{meme.get('image_url', '')}"
+            if signature in unique_meme_signatures:
+                continue
             if meme_id not in memes_collection and meme_id not in rejected_memes and validate_image(meme["image_url"]):
                 memes_collection[meme_id] = meme
+                unique_meme_signatures.add(signature)
                 count_added += 1
                 logger.info(f"Принудительно добавлен мем {meme_id}, Text={meme.get('text', '')[:50]}")
     
@@ -246,7 +272,7 @@ def update_memes():
 
 def fetch_and_add_new_memes(group_id, count=10):
     """Получает новые мемы из VK и добавляет их в коллекцию"""
-    global memes_collection, rejected_memes
+    global memes_collection, rejected_memes, unique_meme_signatures
     logger.info(f"Получение {count} новых мемов из группы {group_id}...")
     new_memes_count = 0
     rejected_count = 0
@@ -255,6 +281,15 @@ def fetch_and_add_new_memes(group_id, count=10):
         logger.info(f"Всего доступно постов в группе {group_id} для добавления: {len(memes)}")
         for meme in memes:
             meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
+            signature = f"{meme.get('text', '')}|{meme.get('image_url', '')}"
+            
+            # Проверка на дубликаты
+            if signature in unique_meme_signatures:
+                rejected_memes[meme_id] = meme
+                rejected_count += 1
+                logger.info(f"Отклонен мем {meme_id} как дубликат")
+                continue
+            
             if meme_id in memes_collection or meme_id in rejected_memes:
                 logger.debug(f"Мем {meme_id} уже существует")
                 continue
@@ -263,6 +298,7 @@ def fetch_and_add_new_memes(group_id, count=10):
             meme_suitable = is_suitable_meme(meme)
             if image_valid and meme_suitable:
                 memes_collection[meme_id] = meme
+                unique_meme_signatures.add(signature)
                 new_memes_count += 1
                 logger.info(f"Добавлен новый мем {meme_id}, Text={meme.get('text', '')[:50]}, Tags={meme.get('tags', [])}")
             else:
@@ -538,6 +574,7 @@ async def report_ad_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     if meme_id in memes_collection:
         rejected_memes[meme_id] = memes_collection.pop(meme_id)
+        unique_meme_signatures.remove(f"{memes_collection[meme_id].get('text', '')}|{memes_collection[meme_id].get('image_url', '')}")
         save_memes_to_cache()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,

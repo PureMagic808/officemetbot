@@ -6,7 +6,12 @@ import random
 
 logger = logging.getLogger(__name__)
 
-VK_GROUP_IDS = [29534144, 60102821]  # Добавьте другие группы с мемами для 18+
+# Обновлённый список групп VK (ID публичных групп с мемами)
+VK_GROUP_IDS = [
+    29534144,  # Оставляем старую группу
+    27532693,  # MDK
+    35208724   # Pikabu
+]
 
 def fetch_vk_memes(group_id: int, count: int, vk_session: vk_api.VkApi) -> List[Dict]:
     """

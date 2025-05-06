@@ -1,14 +1,14 @@
-FROM python:3.10-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libffi-dev \
-    libjpeg-dev \
-    zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Используем легковесный базовый образ Python
+FROM python:3.9-slim
+
+# Устанавливаем рабочую директорию
 WORKDIR /app
-ENV PYTHONUTF8=1
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && apt-get purge -y --auto-remove gcc libffi-dev libjpeg-dev zlib1g-dev
-COPY . .
+
+# Копируем только необходимые файлы
+COPY bot_railway.py meme_data.py vk_utils.py recommendation_engine.py meme_analytics.py requirements.txt ./
+
+# Устанавливаем зависимости
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Указываем точку входа
 CMD ["python", "bot_railway.py"]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Улучшенный файл для запуска Telegram-бота на Railway с исправлениями конфликтов Telegram API
-и фильтрацией новостных мемов. Обеспечивает стабильную работу и загрузку офисных мемов.
+и фильтрацией мемов. Обеспечивает загрузку смешных мемов для 18+.
 """
 import logging
 import os
@@ -62,7 +62,7 @@ unique_meme_signatures = set()
 
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
-MIN_MEMES_COUNT = 5     # Минимальное количество мемов
+MIN_MEMES_COUNT = 1     # Минимальное количество мемов (уменьшено с 5 до 1)
 MAX_MEMES_TO_FETCH = 50 # Увеличен лимит для загрузки
 CONFLICT_RETRIES = 3    # Количество попыток при конфликте
 CONFLICT_RETRY_DELAY = 15  # Задержка между попытками (сек)
@@ -335,8 +335,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=(
-            "👋 Привет! Я бот для просмотра офисных мемов без рекламы и новостей.\n\n"
-            "Все мемы тщательно фильтруются для показа только офисного юмора.\n\n"
+            "👋 Привет! Я бот для просмотра смешных мемов для 18+ (без грязи).\n\n"
+            "Мемы фильтруются для подходящего контента.\n\n"
             "Используйте /start для начала, 👍/👎 для оценки мема, /next для пропуска."
         )
     )
@@ -352,8 +352,8 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await start(update, context)
         return
     
-    if not memes_collection or len(memes_collection) < 2:
-        logger.warning("Мемы отсутствуют или недостаточно в коллекции. Повторная инициализация...")
+    if not memes_collection:
+        logger.warning("Мемы отсутствуют в коллекции. Повторная инициализация...")
         if not init_default_memes():
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -365,38 +365,20 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     viewed_memes = user_states[user_id].get("viewed_memes", [])
     available_memes = [meme_id for meme_id in memes_collection if meme_id not in viewed_memes]
     
-    if not available_memes or len(available_memes) < 2:
-        logger.info(f"Пользователь {user_id} просмотрел все мемы или пулов недостаточно, сбрасываем историю")
+    if not available_memes:
+        logger.info(f"Пользователь {user_id} просмотрел все мемы, сбрасываем историю")
         user_states[user_id]["viewed_memes"] = []
         available_memes = list(memes_collection.keys())
-        if len(available_memes) < 2:
-            logger.warning("Пул мемов меньше 2. Повторная загрузка...")
-            init_default_memes()
-            available_memes = list(memes_collection.keys())
     
-    ratings = user_states[user_id].get("ratings", {})
-    if len(ratings) >= 5:
-        try:
-            recommended_memes = recommend_memes(user_id, memes_collection, 10)
-            recommended_unseen = [m for m in recommended_memes if m not in viewed_memes]
-            meme_id = recommended_unseen[0] if recommended_unseen else random.choice(available_memes)
-            logger.info(f"Отправляем персонализированную рекомендацию для пользователя {user_id}")
-        except Exception as e:
-            logger.error(f"Ошибка при получении рекомендаций: {e}")
-            meme_id = random.choice(available_memes)
-    else:
-        meme_id = random.choice(available_memes)
+    meme_id = random.choice(available_memes) if available_memes else None
     
-    if meme_id not in memes_collection:
-        logger.warning(f"Мем {meme_id} не найден, выбираем другой")
-        if memes_collection:
-            meme_id = random.choice(list(memes_collection.keys()))
-        else:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="К сожалению, на данный момент нет доступных мемов. Попробуйте позже."
-            )
-            return
+    if meme_id is None:
+        logger.warning(f"Мемы не найдены для пользователя {user_id}")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="К сожалению, на данный момент нет доступных мемов. Попробуйте позже."
+        )
+        return
     
     meme = memes_collection[meme_id]
     keyboard = [
@@ -534,7 +516,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         preferences_stats = get_user_preferences_stats(user_id)
         history_analysis = analyze_user_history(user_id, memes_collection)
         favorite_topics = history_analysis.get("favorite_topics", [])
-        topics_str = ", ".join(favorite_topics[:3]) if favorite_topics else "Офис"
+        topics_str = ", ".join(favorite_topics[:3]) if favorite_topics else "Юмор"
         
         await context.bot.send_message(
             chat_id=update.effective_chat.id,

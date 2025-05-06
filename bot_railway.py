@@ -111,7 +111,7 @@ def load_memes_from_cache():
     global memes_collection, rejected_memes, unique_meme_signatures
     try:
         if os.path.exists(MEMES_CACHE_FILE):
-            with open(MEMES_CACHE_FILE, 'r', encodingTar='utf-8') as f:
+            with open(MEMES_CACHE_FILE, 'r', encoding='utf-8') as f:
                 loaded_memes = json.load(f)
                 if loaded_memes and isinstance(loaded_memes, dict):
                     filtered_memes = {}
@@ -186,10 +186,12 @@ def init_default_memes():
                 if signature in unique_meme_signatures:
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
-                    logger.info(f"Отклонен мем {meme_id} как дубликат")
+                    logger.info(f"Отклонен мем {meme_id} как дубликат, Text={meme.get('text', '')[:50]}")
                     continue
                 
                 if meme_id in memes_collection or meme_id in rejected_memes:
+                    count_rejected += 1
+                    logger.info(f"Мем {meme_id} уже существует в коллекции или отклонённых, Text={meme.get('text', '')[:50]}")
                     continue
                 
                 image_valid = validate_image(meme["image_url"])
@@ -203,7 +205,7 @@ def init_default_memes():
                     rejected_memes[meme_id] = meme
                     count_rejected += 1
                     logger.info(f"Отклонен мем {meme_id} {'из-за недоступного изображения' if not image_valid else 'как неподходящий'}, Text={meme.get('text', '')[:50]}")
-            time.sleep(random.uniform(1, 2))  # Увеличена задержка для соблюдения лимитов API
+            time.sleep(random.uniform(2, 3))  # Увеличена задержка для соблюдения лимитов API
         except Exception as e:
             logger.error(f"Ошибка при загрузке мемов из группы {group_id}: {e}")
             continue
@@ -256,13 +258,13 @@ def update_memes():
                 for group_id in VK_GROUP_IDS:
                     logger.info(f"Обновление мемов для группы {group_id}")
                     fetch_and_add_new_memes(group_id, MAX_MEMES_TO_FETCH // len(VK_GROUP_IDS))
-                    time.sleep(random.uniform(1, 2))
+                    time.sleep(random.uniform(2, 3))
             
             logger.info("Выполняется регулярное обновление мемов...")
             for group_id in VK_GROUP_IDS:
                 logger.info(f"Регулярное обновление для группы {group_id}")
                 fetch_and_add_new_memes(group_id, 5)
-                time.sleep(random.uniform(1, 2))
+                time.sleep(random.uniform(2, 3))
             
             save_memes_to_cache()
             time.sleep(UPDATE_INTERVAL)
@@ -287,11 +289,12 @@ def fetch_and_add_new_memes(group_id, count=10):
             if signature in unique_meme_signatures:
                 rejected_memes[meme_id] = meme
                 rejected_count += 1
-                logger.info(f"Отклонен мем {meme_id} как дубликат")
+                logger.info(f"Отклонен мем {meme_id} как дубликат, Text={meme.get('text', '')[:50]}")
                 continue
             
             if meme_id in memes_collection or meme_id in rejected_memes:
                 logger.debug(f"Мем {meme_id} уже существует")
+                rejected_count += 1
                 continue
             
             image_valid = validate_image(meme["image_url"])
@@ -324,22 +327,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "username": username,
             "current_meme": None,
             "viewed_memes": [],
-            "ratings": {}
+            "ratings": {},
+            "start_message_sent": False
         }
-        
+    
+    # Отправляем стартовое сообщение только один раз
+    if not user_states[user_id].get("start_message_sent", False):
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                "👋 Привет! Я бот для просмотра смешных мемов для 18+ (без грязи).\n\n"
+                "Мемы фильтруются для подходящего контента.\n\n"
+                "Используйте /start для начала, 👍/👎 для оценки мема, /next для пропуска."
+            )
+        )
+        user_states[user_id]["start_message_sent"] = True
+    
     try:
         meme_analytics.record_user_session(user_id)
     except Exception as e:
         logger.error(f"Ошибка при записи сессии пользователя в аналитику: {e}")
-    
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=(
-            "👋 Привет! Я бот для просмотра смешных мемов для 18+ (без грязи).\n\n"
-            "Мемы фильтруются для подходящего контента.\n\n"
-            "Используйте /start для начала, 👍/👎 для оценки мема, /next для пропуска."
-        )
-    )
     
     await send_random_meme(update, context)
 
@@ -436,6 +443,10 @@ async def send_random_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logger.error(f"Ошибка при отправке мема {meme_id}: {e}")
         if meme_id in memes_collection:
             rejected_memes[meme_id] = memes_collection.pop(meme_id)
+            # Удаляем подпись из unique_meme_signatures
+            signature = f"{meme.get('text', '')}|{meme.get('image_url', '')}"
+            if signature in unique_meme_signatures:
+                unique_meme_signatures.remove(signature)
             save_memes_to_cache()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -555,8 +566,11 @@ async def report_ad_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     meme_id = user_states[user_id]["current_meme"]
     
     if meme_id in memes_collection:
+        meme = memes_collection[meme_id]
+        signature = f"{meme.get('text', '')}|{meme.get('image_url', '')}"
         rejected_memes[meme_id] = memes_collection.pop(meme_id)
-        unique_meme_signatures.remove(f"{memes_collection[meme_id].get('text', '')}|{memes_collection[meme_id].get('image_url', '')}")
+        if signature in unique_meme_signatures:
+            unique_meme_signatures.remove(signature)
         save_memes_to_cache()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,

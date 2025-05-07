@@ -62,9 +62,9 @@ unique_meme_signatures = set()
 
 # Конфигурация обновления мемов
 UPDATE_INTERVAL = 1800  # Интервал обновления в секундах (30 минут)
-MIN_MEMES_COUNT = 1     # Минимальное количество мемов
-MAX_MEMES_TO_FETCH = 50 # Увеличен лимит для загрузки
-CONFLICT_RETRIES = 3    # Количество попыток при конфликте
+MIN_MEMES_COUNT = 10    # Минимальное количество мемов
+MAX_MEMES_TO_FETCH = 100 # Увеличен лимит для загрузки
+CONFLICT_RETRIES = 5    # Увеличено количество попыток при конфликте
 CONFLICT_RETRY_DELAY = 15  # Задержка между попытками (сек)
 
 # Флаг для управления процессом обновления
@@ -137,7 +137,7 @@ def load_memes_from_cache():
                     rejected_memes.update(loaded_rejected)
                     logger.info(f"Загружено {len(rejected_memes)} отклоненных мемов")
         
-        return len(memes_collection) > 0
+        return len(memes_collection) >= MIN_MEMES_COUNT
     except Exception as e:
         logger.error(f"Ошибка при загрузке мемов из кэша: {e}")
         return False
@@ -212,7 +212,8 @@ def init_default_memes():
     
     if count_added < MIN_MEMES_COUNT:
         logger.warning(f"Добавлено только {count_added} мемов, меньше {MIN_MEMES_COUNT}. Принудительное добавление...")
-        for meme in memes[:MIN_MEMES_COUNT - count_added]:
+        remaining = MIN_MEMES_COUNT - count_added
+        for meme in memes[:remaining]:
             meme_id = f"vk_{abs(hash(meme['image_url'] + meme['text']))}"
             signature = f"{meme.get('text', '')}|{meme.get('image_url', '')}"
             if signature in unique_meme_signatures:
@@ -698,11 +699,11 @@ def check_and_create_lock():
                             try:
                                 os.kill(pid, 0)
                                 logger.error(f"Бот уже запущен с PID {pid}. Завершаем текущий процесс.")
-                                sys.exit(1)
+                                return False
                             except OSError:
                                 logger.warning(f"Найден lock от несуществующего процесса {pid}. Удаляем.")
                                 os.remove(LOCK_FILE)
-                except Exception as e:
+                except (ValueError, IOError) as e:
                     logger.error(f"Ошибка при проверке PID в lock-файле: {e}")
                     os.remove(LOCK_FILE)
             else:
@@ -812,8 +813,9 @@ def main():
         except telegram.error.Conflict as conflict_error:
             logger.error(f"Обнаружен конфликт Telegram API: {conflict_error}. Проверяем запущенные экземпляры...")
             if attempt < CONFLICT_RETRIES - 1:
-                logger.info(f"Ожидаем {CONFLICT_RETRY_DELAY} секунд перед повторной попыткой...")
-                time.sleep(CONFLICT_RETRY_DELAY)
+                delay = CONFLICT_RETRY_DELAY + random.uniform(0, 5)  # Случайная задержка
+                logger.info(f"Ожидаем {delay:.1f} секунд перед повторной попыткой...")
+                time.sleep(delay)
                 # Проверяем lock-файл перед повторной попыткой
                 if not check_and_create_lock():
                     logger.error("Другой экземпляр бота всё ещё работает. Завершаем.")

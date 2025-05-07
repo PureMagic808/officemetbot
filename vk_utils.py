@@ -11,6 +11,15 @@ VK_GROUP_IDS = [
     29534144,  # Оставляем старую группу
     27532693,  # MDK
     35208724   # Pikabu
+    29534144
+    61478497
+    34246602
+    38764982
+    52837491
+    74918234
+    89123456
+    45678901
+
 ]
 
 def fetch_vk_memes(group_id: int, count: int, vk_session: vk_api.VkApi) -> List[Dict]:
